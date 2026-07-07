@@ -10,9 +10,9 @@ class AuthService {
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   // Login → store token + user, return User
-  Future<User> login(String email, String password) async {
+  Future<User> login(String loginIdentifier, String password) async {
     final response = await _api.post('/auth/login', data: {
-      'email': email,
+      'loginIdentifier': loginIdentifier,
       'password': password,
     });
 

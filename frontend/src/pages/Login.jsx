@@ -8,7 +8,7 @@ const Login = () => {
   const { t } = useTranslation();
 
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
+  const [loginIdentifier, setLoginIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,7 +19,7 @@ const Login = () => {
     setError('');
     
     try {
-      const res = await api.post('/auth/login', { email, password });
+      const res = await api.post('/auth/login', { loginIdentifier, password });
       localStorage.setItem('token', res.data.token);
       localStorage.setItem('user', JSON.stringify(res.data.user));
       navigate('/');
@@ -52,13 +52,13 @@ const Login = () => {
 
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">{t('login.email_address', { defaultValue: `Email Address` })}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">{t('login.email_or_username', { defaultValue: `Email or Username` })}</label>
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                type="text"
+                value={loginIdentifier}
+                onChange={(e) => setLoginIdentifier(e.target.value)}
                 className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all outline-none"
-                placeholder={t('login.admin_bitar_com', { defaultValue: `admin@bitar.com` })}
+                placeholder={t('login.email_username_placeholder', { defaultValue: `admin@bitar.com or admin` })}
                 required
               />
             </div>

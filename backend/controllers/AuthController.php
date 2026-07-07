@@ -8,14 +8,15 @@ class AuthController {
 
     public function login() {
         $data = json_decode(file_get_contents("php://input"), true);
-        if (!isset($data['email']) || !isset($data['password'])) {
+        $identifier = $data['loginIdentifier'] ?? $data['email'] ?? null;
+        if (!$identifier || !isset($data['password'])) {
             http_response_code(400);
-            echo json_encode(['error' => 'Email and password are required']);
+            echo json_encode(['error' => 'Email/Username and password are required']);
             return;
         }
 
-        $stmt = $this->db->prepare("SELECT * FROM users WHERE email = ?");
-        $stmt->execute([$data['email']]);
+        $stmt = $this->db->prepare("SELECT * FROM users WHERE email = ? OR username = ?");
+        $stmt->execute([$identifier, $identifier]);
         $user = $stmt->fetch();
 
         if ($user && password_verify($data['password'], $user['password'])) {
