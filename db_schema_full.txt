@@ -1,0 +1,453 @@
+Table: ac_maintenance_tasks
+  id int(11)
+  apartment_id int(11)
+  worker_id int(11)
+  scheduled_date date
+  status enum('Scheduled','Pending_Approval','Completed','Rejected')
+  before_photo longtext
+  after_photo longtext
+  notes text
+  submission_date datetime
+  completion_date datetime
+  created_at timestamp
+
+Table: activity_logs
+  id int(11)
+  user_id int(11)
+  action varchar(255)
+  entity_type varchar(50)
+  entity_id int(11)
+  details text
+  created_at timestamp
+
+Table: apartment_expenses
+  id int(11)
+  apartment_id int(11)
+  product_id int(11)
+  quantity int(11)
+  cost decimal(10,2)
+  total decimal(10,2)
+  date date
+  created_at timestamp
+
+Table: apartments
+  id int(11)
+  building_id int(11)
+  code varchar(50)
+  monthly_rent decimal(10,2)
+  monthly_insurance decimal(10,2)
+  status enum('Vacant','Rented','Maintenance')
+  created_at timestamp
+
+Table: audit_logs
+  id int(11)
+  user_id int(11)
+  action varchar(50)
+  entity_type varchar(50)
+  entity_id int(11)
+  details text
+  created_at timestamp
+
+Table: buildings
+  id int(11)
+  name varchar(255)
+  created_at timestamp
+
+Table: constructions
+  id int(11)
+  name varchar(255)
+  owner varchar(255)
+  location varchar(255)
+  start_date date
+  end_date date
+  status varchar(50)
+  budget decimal(10,2)
+  estimated_cost decimal(10,2)
+  actual_cost decimal(10,2)
+  manager varchar(255)
+  notes text
+  created_at timestamp
+
+Table: contracts
+  id int(11)
+  apartment_id int(11)
+  tenant_id int(11)
+  start_date date
+  end_date date
+  status enum('Active','Terminated','Expired','Draft','Pending_Signature','Signed','Approved','Rejected','Renewal_Pending')
+  created_at timestamp
+  monthly_rent decimal(10,2)
+  monthly_insurance decimal(10,2)
+  payment_terms text
+  contract_document_url varchar(255)
+  signed_document_url varchar(255)
+  manager_approval_date datetime
+  contract_file varchar(255)
+
+Table: damage_reports
+  id int(11)
+  transaction_id int(11)
+  reason text
+  photos longtext
+  created_at timestamp
+
+Table: electricity_invoices
+  id int(11)
+  apartment_id int(11)
+  type enum('Subscription','Meter')
+  amount decimal(10,2)
+  due_date date
+  status enum('Unpaid','Paid')
+  created_at timestamp
+
+Table: electricity_meter_readings
+  id int(11)
+  apartment_id int(11)
+  meter_number varchar(100)
+  previous_reading decimal(12,2)
+  current_reading decimal(12,2)
+  price_per_kwh decimal(10,2)
+  consumption decimal(12,2)
+  bill_amount decimal(10,2)
+  reading_date date
+  created_at timestamp
+
+Table: electricity_subscriptions
+  id int(11)
+  apartment_id int(11)
+  monthly_fee decimal(10,2)
+  amps decimal(10,2)
+  cost_per_amp decimal(10,2)
+  start_date date
+  end_date date
+  status enum('Active','Inactive')
+  created_at timestamp
+
+Table: energy_alerts
+  id int(11)
+  type enum('Warning','Info','Danger')
+  message text
+  is_read tinyint(1)
+  created_at timestamp
+
+Table: estimation_rates
+  id int(11)
+  item_name varchar(100)
+  category varchar(50)
+  unit varchar(20)
+  default_price decimal(10,2)
+
+Table: expenses
+  id int(11)
+  category varchar(50)
+  entity_type varchar(50)
+  entity_id int(11)
+  amount decimal(10,2)
+  date date
+  notes text
+  reference_id varchar(100)
+  user_id int(11)
+  created_at timestamp
+
+Table: fuel_movements
+  id int(11)
+  generator_id int(11)
+  type enum('Refill','Transfer_In','Transfer_Out','Adjustment','Emergency','Manual_Correction')
+  amount decimal(10,2)
+  cost_per_liter decimal(10,2)
+  supplier_id int(11)
+  date datetime
+  user_id int(11)
+  notes text
+  receipt_path varchar(255)
+  created_at timestamp
+
+Table: fuel_suppliers
+  id int(11)
+  name varchar(255)
+  contact_info text
+  created_at timestamp
+
+Table: generator_ai_profiles
+  id int(11)
+  generator_id int(11)
+  normal_consumption_pattern longtext
+  seasonal_patterns longtext
+  high_load_periods longtext
+  low_load_periods longtext
+  aging_factor decimal(5,4)
+  last_analyzed_at timestamp
+  created_at timestamp
+
+Table: generator_ai_summaries
+  id int(11)
+  date date
+  daily_summary text
+  weekly_summary text
+  created_at timestamp
+
+Table: generator_alerts
+  id int(11)
+  generator_id int(11)
+  report_id int(11)
+  alert_type varchar(100)
+  message text
+  severity enum('Warning','Critical','Info')
+  status enum('Unread','Read','Resolved')
+  created_at timestamp
+  probabilities longtext
+
+Table: generator_daily_reports
+  id int(11)
+  generator_id int(11)
+  date date
+  fuel_added decimal(10,2)
+  expected_fuel_used decimal(10,2)
+  cost_per_liter decimal(10,2)
+  fuel_remaining decimal(10,2)
+  spare_remaining decimal(10,2)
+  running_hours decimal(10,2)
+  meter_hours decimal(10,2)
+  kwh_produced decimal(10,2)
+  notes text
+  discrepancy_reason text
+  photo_path varchar(255)
+  submitted_by int(11)
+  created_at timestamp
+  previous_kwh decimal(10,2)
+  current_kwh decimal(10,2)
+  efficiency_score decimal(10,2)
+  alert_level enum('Normal','Warning','Critical')
+  load_percentage decimal(5,2)
+  outages_count int(11)
+  expected_fuel_consumption decimal(10,2)
+  actual_fuel_consumption decimal(10,2)
+  fuel_consumption_per_hour decimal(10,2)
+  fuel_consumption_per_kwh decimal(10,2)
+  cost_of_electricity decimal(10,2)
+  fuel_variance decimal(10,2)
+  estimated_days_empty decimal(10,2)
+  photo_meter_path varchar(255)
+  actual_fuel_remaining decimal(10,2)
+  estimated_fuel_remaining decimal(10,2)
+  estimated_fuel_used decimal(10,2)
+  actual_fuel_used decimal(10,2)
+  fuel_difference decimal(10,2)
+  status enum('Pending Verification','Verified','Flagged')
+  previous_meter_hours decimal(10,2)
+  current_meter_hours decimal(10,2)
+  liters_per_hour decimal(10,2)
+  liters_per_kwh decimal(10,2)
+
+Table: generators
+  id int(11)
+  building_id int(11)
+  name varchar(255)
+  brand varchar(255)
+  model varchar(255)
+  serial_number varchar(255)
+  capacity_kva decimal(10,2)
+  fuel_capacity decimal(10,2)
+  current_fuel decimal(10,2)
+  baseline_fuel_per_hour decimal(10,2)
+  price_per_kw decimal(10,2)
+  spare_fuel decimal(10,2)
+  purchase_date date
+  status enum('Running','Maintenance','Offline')
+  notes text
+  created_at timestamp
+  expected_fuel_consumption_per_hour decimal(10,2)
+  expected_fuel_consumption_per_kwh decimal(10,2)
+  maintenance_interval_hours decimal(10,2)
+  min_fuel_level_alert decimal(10,2)
+  normal_operating_thresholds longtext
+  alert_thresholds longtext
+  efficiency_score int(11)
+  reliability_score int(11)
+  maintenance_score int(11)
+  fuel_accuracy_score int(11)
+  risk_score int(11)
+  health_score int(11)
+
+Table: insurance_accounts
+  id int(11)
+  contract_id int(11)
+  total_saved decimal(10,2)
+  created_at timestamp
+
+Table: insurance_transactions
+  id int(11)
+  account_id int(11)
+  type enum('Deposit','Refund','Deduct','Apply_To_Rent')
+  amount decimal(10,2)
+  date date
+  user_id int(11)
+  notes text
+  created_at timestamp
+
+Table: inventory_items
+  id int(11)
+  name varchar(100)
+  category varchar(50)
+  unit varchar(20)
+  current_stock decimal(10,2)
+  min_stock decimal(10,2)
+  unit_cost decimal(10,2)
+  supplier varchar(100)
+  warehouse_location varchar(100)
+  created_at timestamp
+
+Table: inventory_transactions
+  id int(11)
+  item_id int(11)
+  type enum('IN','OUT')
+  quantity decimal(10,2)
+  project_id int(11)
+  user_id int(11)
+  notes text
+  date date
+  created_at timestamp
+
+Table: invoice_items
+  id int(11)
+  invoice_id int(11)
+  product_id int(11)
+  reference varchar(100)
+  quantity int(11)
+  cost_price decimal(10,2)
+  tva decimal(5,2)
+  total_price decimal(10,2)
+
+Table: invoices
+  id int(11)
+  invoice_number varchar(100)
+  date date
+  customer_type enum('Walk-In','Building','Apartment','Construction')
+  customer_id int(11)
+  customer_name varchar(255)
+  subtotal decimal(10,2)
+  total_tva decimal(10,2)
+  discount decimal(10,2)
+  final_amount decimal(10,2)
+  created_at timestamp
+
+Table: products
+  id int(11)
+  name varchar(255)
+  code varchar(100)
+  reference varchar(100)
+  barcode varchar(100)
+  category varchar(100)
+  unit varchar(50)
+  cost_price decimal(10,2)
+  tva decimal(5,2)
+  selling_price decimal(10,2)
+  quantity int(11)
+  minimum_quantity int(11)
+  description text
+  created_at timestamp
+
+Table: purchase_requests
+  id int(11)
+  project_id int(11)
+  item_id int(11)
+  quantity_needed decimal(10,2)
+  estimated_cost decimal(10,2)
+  status varchar(50)
+  created_at timestamp
+
+Table: renewal_requests
+  id int(11)
+  contract_id int(11)
+  status enum('Requested','Declined','Approved','Pending')
+  created_at timestamp
+
+Table: rent_invoices
+  id int(11)
+  contract_id int(11)
+  invoice_number varchar(100)
+  amount decimal(10,2)
+  due_date date
+  status enum('Unpaid','Partial','Paid','Overdue')
+  created_at timestamp
+
+Table: rent_payments
+  id int(11)
+  invoice_id int(11)
+  amount decimal(10,2)
+  date date
+  user_id int(11)
+  notes text
+  created_at timestamp
+
+Table: stock_movements
+  id int(11)
+  product_id int(11)
+  type enum('IN','OUT')
+  quantity int(11)
+  reference_type varchar(100)
+  reference_id int(11)
+  date datetime
+  created_at timestamp
+
+Table: tenants
+  id int(11)
+  user_id int(11)
+  full_name varchar(255)
+  phone varchar(50)
+  email varchar(255)
+  national_id varchar(100)
+  created_at timestamp
+  address text
+  emergency_contact varchar(255)
+  passport_url varchar(255)
+  id_url varchar(255)
+  status enum('Active','Inactive')
+
+Table: users
+  id int(11)
+  name varchar(255)
+  email varchar(255)
+  password varchar(255)
+  role enum('admin','manager','cashier','tenant')
+  created_at timestamp
+  phone varchar(50)
+  national_id varchar(100)
+
+Table: workshop_estimates
+  id int(11)
+  project_id int(11)
+  item_name varchar(100)
+  category varchar(50)
+  quantity decimal(10,2)
+  unit varchar(20)
+  unit_price decimal(10,2)
+  total_price decimal(10,2)
+  is_reserved tinyint(1)
+
+Table: workshop_projects
+  id int(11)
+  name varchar(100)
+  land_area decimal(10,2)
+  floors int(11)
+  apartments_per_floor int(11)
+  total_apartments int(11)
+  status varchar(50)
+  progress int(11)
+  created_at timestamp
+
+Table: workshop_specifications
+  id int(11)
+  project_id int(11)
+  bedrooms int(11)
+  bathrooms int(11)
+  kitchens int(11)
+  living_rooms int(11)
+  balconies int(11)
+  windows int(11)
+  doors int(11)
+  parking_spaces int(11)
+  elevators int(11)
+  roof_area decimal(10,2)
+  garden_area decimal(10,2)
+

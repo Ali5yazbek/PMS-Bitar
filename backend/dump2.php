@@ -1,0 +1,1 @@
+<?php require 'config.php'; require 'core/Database.php'; $db = Database::getInstance()->getConnection(); $stmt = $db->query("SHOW CREATE TABLE rent_payments"); print_r($stmt->fetch(PDO::FETCH_ASSOC));

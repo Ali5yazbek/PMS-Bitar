@@ -1,0 +1,16 @@
+DirectoryIndex index.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # 1. If the URL starts with /backend, DO NOT redirect to React.
+  # Let the server look inside the backend directory.
+  RewriteCond %{REQUEST_URI} ^/backend [NC]
+  RewriteRule .* - [L]
+
+  # 2. For all other React pages (/login, /dashboard, etc.), show index.html
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>

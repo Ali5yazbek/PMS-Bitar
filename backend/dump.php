@@ -1,0 +1,1 @@
+<?php require 'config.php'; require 'core/Database.php'; $db = Database::getInstance()->getConnection(); $tables = ['tenants', 'contracts', 'rent_invoices', 'rent_profiles']; foreach($tables as $t) { $stmt = $db->query("SHOW CREATE TABLE $t"); print_r($stmt->fetch(PDO::FETCH_ASSOC)); }
