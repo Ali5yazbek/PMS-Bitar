@@ -1,6 +1,6 @@
-# SOCIMCO / Bitar — Enterprise Property Management System (PMS)
+# Property Management System (PMS)
 
-An end-to-end **Enterprise Property, Energy, Maintenance & Financial Management Platform** built for **SOCIMCO / Bitar**. The platform unifies real-estate portfolio operations, automated rent & insurance ledgers, generator & electricity sub-metering, AC & tenant maintenance workflows, warehouse/POS inventory, and **Agency AI** across Web and Mobile (Android, iOS, and Web).
+An end-to-end **Enterprise Property, Energy, Maintenance & Financial Management Platform** unifying real-estate portfolio operations, automated rent & insurance ledgers, generator & electricity sub-metering, AC & tenant maintenance workflows, warehouse/POS inventory, and **Agency AI** across Web and Mobile (Android, iOS, and Web).
 
 ---
 
@@ -8,9 +8,9 @@ An end-to-end **Enterprise Property, Energy, Maintenance & Financial Management 
 
 ```
 PMS-Bitar/
-├── backend/                # PHP 8+ REST API (JWT Auth, Custom Router, PDO MySQL, NLP Engine)
-│   ├── controllers/        # 40+ domain controllers (Buildings, Tenants, Contracts, Energy, AI, etc.)
-│   ├── core/               # Database singleton, JWT, Router, NLPEngine, Audit & Integrity Scanners
+├── backend/                # PHP 8+ REST API (JWT Auth, Router, PDO MySQL, NLP Engine)
+│   ├── controllers/        # Domain controllers (Buildings, Tenants, Contracts, Energy, AI, etc.)
+│   ├── core/               # Database, JWT, Router, NLPEngine, Audit & Integrity Scanners
 │   ├── cron/               # Automated daily/monthly rent, compliance & notification schedulers
 │   └── services/           # RentGenerationService & automated billing engines
 ├── frontend/               # React 18 Enterprise Web Portal (Tailwind CSS, Recharts, i18next EN/FR)
@@ -19,7 +19,7 @@ PMS-Bitar/
 │       └── pages/          # Admin, Manager, Cashier, Agent, and Tenant web portals
 ├── mobile/                 # Flutter Cross-Platform App (Android, iOS, Web — Riverpod & GoRouter)
 │   └── lib/
-│       ├── config/         # Luxury Obsidian & Royal Teal/Gold Design System (app_theme.dart)
+│       ├── config/         # Luxury Obsidian & Royal Teal/Gold Design System
 │       ├── providers/      # Riverpod state management & instant RAM auth/API caching
 │       ├── screens/        # Role-based shells (Admin, Manager, Agent, Maintenance, Tenant)
 │       └── services/       # Deduplicated, cached Dio API client & background prefetcher
@@ -32,7 +32,7 @@ PMS-Bitar/
 
 ### 1. Property, Lease & Rent Automation
 * **Buildings & Apartments**: Track occupancy (`Rented` vs. `Vacant`), monthly rent, insurance deposits, and unit-level profitability.
-* **Smart Contracts & Rent Profiles**: Automated monthly/periodic rent invoice generation (`RentGenerationService`), partial payment tracking, overdue calculation, and lease renewal/termination archiving.
+* **Smart Contracts & Rent Profiles**: Automated monthly/periodic rent invoice generation, partial payment tracking, overdue calculation, and lease renewal/termination archiving.
 * **Insurance Ledger**: Dedicated tenant deposit accounts and transaction histories.
 
 ### 2. Energy, Generators & Sub-Metering
@@ -66,51 +66,5 @@ PMS-Bitar/
 
 ---
 
-## Quick Start & Setup
-
-### 1. Backend API (`backend/`)
-1. Ensure **PHP 8.1+** and **MySQL / MariaDB** (e.g., via XAMPP or Hostinger) are running.
-2. Copy or configure `backend/.env`:
-   ```env
-   DB_HOST=127.0.0.1
-   DB_PORT=3306
-   DB_DATABASE=bitar_pms
-   DB_USERNAME=root
-   DB_PASSWORD=
-   JWT_SECRET=your_jwt_secret
-   API_BASE_PATH=/Bitar/backend
-   APP_URL=http://localhost:3000
-   ```
-3. Point Apache/Nginx to the workspace root (or `backend/` in production).
-
-### 2. Web Frontend (`frontend/`)
-```bash
-cd frontend
-npm install
-npm start
-```
-For production builds:
-```bash
-npm run build
-```
-
-### 3. Mobile Application (`mobile/`)
-1. Configure `mobile/.env`:
-   ```env
-   API_BASE_URL=https://socimco.wormbitfactory.com/backend/api
-   ```
-2. Run in development (Chrome or Android/iOS device):
-   ```bash
-   cd mobile
-   flutter pub get
-   flutter run -d chrome --web-browser-flag "--disable-web-security"
-   ```
-3. Build release APK:
-   ```bash
-   flutter build apk --release
-   ```
-
----
-
 ## License
-Proprietary — **SOCIMCO / Bitar Property Management System**. All rights reserved.
+Proprietary — All rights reserved.
