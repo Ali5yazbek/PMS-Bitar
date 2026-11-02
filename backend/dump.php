@@ -1,1 +1,12 @@
-<?php require 'config.php'; require 'core/Database.php'; $db = Database::getInstance()->getConnection(); $tables = ['tenants', 'contracts', 'rent_invoices', 'rent_profiles']; foreach($tables as $t) { $stmt = $db->query("SHOW CREATE TABLE $t"); print_r($stmt->fetch(PDO::FETCH_ASSOC)); }
+<?php
+$db = new PDO('mysql:host=localhost;dbname=bitar_pms', 'root', '');
+$tables = ['electricity_subscriptions', 'electricity_meter_readings', 'agent_subscription_readings', 'electricity_invoices', 'notifications'];
+foreach ($tables as $table) {
+    echo "--- $table ---\n";
+    $stmt = $db->query("DESCRIBE $table");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        echo $row['Field'] . " " . $row['Type'] . "\n";
+    }
+    echo "\n";
+}
+?>

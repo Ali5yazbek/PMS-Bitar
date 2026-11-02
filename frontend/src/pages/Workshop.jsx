@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from '../api/axios';
-import { HardHat, Search, Plus, Map, Layers, DollarSign, PenTool, CheckCircle, Clock } from 'lucide-react';
+import { HardHat, Search, Plus, Map, Layers, DollarSign, PenTool, CheckCircle, Clock, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
@@ -32,6 +32,7 @@ const Workshop = () => {
     mutationFn: (projectData) => axios.post('/workshop', projectData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workshopProjects'] });
+      queryClient.invalidateQueries({ queryKey: ['constructions'] });
       setShowAdd(false);
       setNewProject({
         name: '', land_area: '', floors: '', apartments_per_floor: '',
@@ -43,7 +44,27 @@ const Workshop = () => {
     }
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id) => axios.delete(`/workshop/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workshopProjects'] });
+      queryClient.invalidateQueries({ queryKey: ['constructions'] });
+    },
+    onError: (err) => {
+      alert(err.response?.data?.error || t('workshop.delete_failed', { defaultValue: 'Failed to delete project' }));
+    }
+  });
+
   const filteredProjects = projects?.filter(p => p.name?.toLowerCase().includes(searchTerm.toLowerCase()));
+
+
+  const { data: settings } = useQuery({
+    queryKey: ['globalSettings'],
+    queryFn: async () => {
+      const res = await axios.get('/global-settings');
+      return res.data;
+    }
+  });
 
   const calculatePreview = () => {
     const fl = parseFloat(newProject.floors) || 0;
@@ -59,11 +80,18 @@ const Workshop = () => {
     const totalWindows = (parseFloat(sp.windows) || 0) * totalApts;
     const totalDoors = (parseFloat(sp.doors) || 0) * totalApts;
 
-    const cement = totalArea > 0 ? (10000 / 3200) * totalArea : 0;
-    const sand = totalArea > 0 ? (500 / 3200) * totalArea : 0;
-    const steel = totalArea > 0 ? (50 / 3200) * totalArea : 0;
-    const blocks = totalArea > 0 ? (150000 / 3200) * totalArea : 0;
-    const cost = totalArea * 150000;
+    const baseArea = parseFloat(settings?.workshop_base_area) || 3200;
+    const cementBase = parseFloat(settings?.workshop_cement_base) || 10000;
+    const sandBase = parseFloat(settings?.workshop_sand_base) || 500;
+    const steelBase = parseFloat(settings?.workshop_steel_base) || 50;
+    const blocksBase = parseFloat(settings?.workshop_blocks_base) || 150000;
+    const costPerSqm = parseFloat(settings?.workshop_cost_per_sqm) || 150000;
+
+    const cement = totalArea > 0 ? (cementBase / baseArea) * totalArea : 0;
+    const sand = totalArea > 0 ? (sandBase / baseArea) * totalArea : 0;
+    const steel = totalArea > 0 ? (steelBase / baseArea) * totalArea : 0;
+    const blocks = totalArea > 0 ? (blocksBase / baseArea) * totalArea : 0;
+    const cost = totalArea * costPerSqm;
 
     return { totalApts, totalArea, totalRooms, totalBaths, totalKitchens, totalWindows, totalDoors, cement, sand, steel, blocks, cost };
   };
@@ -158,7 +186,13 @@ const Workshop = () => {
             ))
           ) : (
             filteredProjects?.length > 0 ? filteredProjects.map(project => (
-              <ProjectCard key={project.id} project={project} navigate={navigate} />
+              <ProjectCard 
+                key={project.id} 
+                project={project} 
+                navigate={navigate} 
+                onDelete={(id) => deleteMutation.mutate(id)}
+                isDeleting={deleteMutation.isPending}
+              />
             )) : (
               <div className="col-span-full flex flex-col items-center justify-center p-12 text-muted glass-card">
                 <HardHat size={48} className="mb-4 opacity-20" />
@@ -250,16 +284,34 @@ const Workshop = () => {
   );
 };
 
-const ProjectCard = ({ project, navigate }) => {
+const ProjectCard = ({ project, navigate, onDelete, isDeleting }) => {
   const { t } = useTranslation();
   return (
     <div 
-      className="glass-card p-0 flex flex-col hover-card overflow-hidden"
+      className="glass-card p-0 flex flex-col hover-card overflow-hidden group cursor-pointer relative"
       onClick={() => navigate(`/workshop/${project.id}`)}
     >
       <div className="h-32 bg-slate-800 relative flex items-center justify-center">
-        <HardHat size={48} className="text-slate-600 opacity-50" />
-        <div className="absolute top-3 right-3 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-full text-xs font-medium text-white flex items-center">
+        <HardHat size={48} className="text-slate-600 opacity-50 group-hover:scale-105 transition-transform duration-300" />
+        
+        {/* Delete Button */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (window.confirm(t('workshop.delete_confirm', { defaultValue: `Are you sure you want to delete project "${project.name}"? This will permanently remove its estimates and specifications.` }))) {
+              onDelete(project.id);
+            }
+          }}
+          disabled={isDeleting}
+          className="absolute top-3 left-3 p-2 bg-slate-900/80 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-lg backdrop-blur-md transition-all duration-200 shadow hover:scale-105 border border-slate-700/50 hover:border-rose-500/40 z-10"
+          title={t('workshop.delete_btn', { defaultValue: 'Delete Project' })}
+        >
+          <Trash2 size={16} />
+        </button>
+
+        {/* Status Badge */}
+        <div className="absolute top-3 right-3 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-full text-xs font-medium text-white flex items-center border border-slate-700/40 shadow">
           <Clock size={12} className="mr-1 text-primary" /> {t('construction.status_' + (project.status || 'Active').toLowerCase(), { defaultValue: project.status || 'Active' })}
         </div>
       </div>
@@ -269,7 +321,7 @@ const ProjectCard = ({ project, navigate }) => {
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div className="flex items-center text-muted text-sm">
             <Map size={16} className="mr-2 text-slate-500" />
-            {project.area || 'N/A'} {t('settings.units.m2', {defaultValue: 'm2'})}
+            {project.area || project.land_area || 'N/A'} {t('settings.units.m2', {defaultValue: 'm2'})}
           </div>
           <div className="flex items-center text-muted text-sm">
             <Layers size={16} className="mr-2 text-slate-500" />
@@ -277,7 +329,7 @@ const ProjectCard = ({ project, navigate }) => {
           </div>
           <div className="flex items-center text-muted text-sm">
             <DollarSign size={16} className="mr-2 text-slate-500" />
-            {t('common.currency')} {Number(project.estimated_cost || 0).toLocaleString()}
+            {t('common.currency')} {Number(project.estimated_cost || project.budget || 0).toLocaleString()}
           </div>
           <div className="flex items-center text-muted text-sm">
             <PenTool size={16} className="mr-2 text-slate-500" />

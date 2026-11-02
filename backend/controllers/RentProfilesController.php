@@ -143,19 +143,25 @@ class RentProfilesController {
                 $periodEnd = clone $nextBillingDate;
                 $periodEnd->modify('-1 day'); // Because periods are inclusive
                 
-                $insertInvoice = $this->db->prepare("
-                    INSERT INTO rent_invoices (contract_id, invoice_number, amount, due_date, status, period_start, period_end) 
-                    VALUES (?, ?, ?, ?, 'Unpaid', ?, ?)
-                ");
-                $insertInvoice->execute([
-                    $profile['contract_id'], 
-                    $invoice_num, 
-                    $amountToBill, 
-                    $periodStart, 
-                    $periodStart, 
-                    $periodEnd->format('Y-m-d')
-                ]);
-                $this->logHistory($id, 'Rent Renewed', $profile['next_billing_date'], $nextBillingDate->format('Y-m-d'), "Generated invoice $invoice_num", $user['user_id']);
+                // Check for duplicates
+                $checkDup = $this->db->prepare("SELECT id FROM rent_invoices WHERE rent_profile_id = ? AND period_start = ?");
+                $checkDup->execute([$id, $periodStart]);
+                if ($checkDup->rowCount() == 0) {
+                    $insertInvoice = $this->db->prepare("
+                        INSERT INTO rent_invoices (contract_id, rent_profile_id, invoice_number, amount, due_date, status, period_start, period_end) 
+                        VALUES (?, ?, ?, ?, ?, 'Unpaid', ?, ?)
+                    ");
+                    $insertInvoice->execute([
+                        $profile['contract_id'], 
+                        $id,
+                        $invoice_num, 
+                        $amountToBill, 
+                        $periodStart, 
+                        $periodStart, 
+                        $periodEnd->format('Y-m-d')
+                    ]);
+                    $this->logHistory($id, 'Rent Renewed', $profile['next_billing_date'], $nextBillingDate->format('Y-m-d'), "Generated invoice $invoice_num", $user['user_id']);
+                }
             } else if ($action === 'skip') {
                 $this->logHistory($id, 'Billing Cycle Skipped', $profile['next_billing_date'], $nextBillingDate->format('Y-m-d'), "Skipped 1 billing cycle without generating invoice", $user['user_id']);
             } else {
@@ -189,62 +195,16 @@ class RentProfilesController {
     }
 
     public function processAutoRenewals() {
-        // Can be called by a cron job or admin
-        // AuthMiddleware::requireLogin(); // Or an API key check if it's a cron
-        
+        require_once __DIR__ . '/../services/RentGenerationService.php';
         try {
-            $this->db->beginTransaction();
-
-            $stmt = $this->db->query("
-                SELECT * FROM rent_profiles 
-                WHERE status = 'Active' 
-                AND auto_renewal = 1 
-                AND next_billing_date <= CURRENT_DATE()
-            ");
-            $profiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            $processedCount = 0;
-
-            foreach ($profiles as $profile) {
-                $currentBillingDate = new DateTime($profile['next_billing_date']);
-                $nextBillingDate = clone $currentBillingDate;
-                
-                if ($profile['billing_frequency'] === 'Weekly') $nextBillingDate->modify('+1 week');
-                else if ($profile['billing_frequency'] === 'Quarterly') $nextBillingDate->modify('+3 months');
-                else if ($profile['billing_frequency'] === 'Yearly') $nextBillingDate->modify('+1 year');
-                else $nextBillingDate->modify('+1 month'); // Default Monthly
-
-                $invoice_num = 'INV-' . date('Ym') . '-' . $profile['contract_id'] . '-' . rand(100, 999);
-                
-                $periodStart = $currentBillingDate->format('Y-m-d');
-                $periodEnd = clone $nextBillingDate;
-                $periodEnd->modify('-1 day'); 
-                
-                $insertInvoice = $this->db->prepare("
-                    INSERT INTO rent_invoices (contract_id, invoice_number, amount, due_date, status, period_start, period_end) 
-                    VALUES (?, ?, ?, ?, 'Unpaid', ?, ?)
-                ");
-                $insertInvoice->execute([
-                    $profile['contract_id'], 
-                    $invoice_num, 
-                    $profile['monthly_amount'], 
-                    $periodStart, 
-                    $periodStart, 
-                    $periodEnd->format('Y-m-d')
-                ]);
-
-                $this->logHistory($profile['id'], 'Auto Renewed', $profile['next_billing_date'], $nextBillingDate->format('Y-m-d'), "System auto-generated invoice $invoice_num", null);
-
-                $stmtUp = $this->db->prepare("UPDATE rent_profiles SET next_billing_date = ? WHERE id = ?");
-                $stmtUp->execute([$nextBillingDate->format('Y-m-d'), $profile['id']]);
-                
-                $processedCount++;
-            }
-
-            $this->db->commit();
-            echo json_encode(['message' => "$processedCount auto-renewals processed successfully"]);
+            $result = RentGenerationService::runDaily();
+            echo json_encode([
+                'message'        => "{$result['invoices_created']} auto-renewals processed, {$result['statuses_reconciled']} statuses reconciled.",
+                'auto_generated' => $result['invoices_created'],
+                'statuses_reconciled' => $result['statuses_reconciled'],
+                'details'        => $result['details']
+            ]);
         } catch (Exception $e) {
-            $this->db->rollBack();
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }

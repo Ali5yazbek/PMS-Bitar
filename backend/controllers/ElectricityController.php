@@ -43,10 +43,10 @@ class ElectricityController {
             $stmt = $this->db->prepare("
                 SELECT a.id as apartment_id, a.code as apartment_code,
                        t.full_name as tenant_name, t.user_id as tenant_user_id,
-                       es.id as subscription_id, es.monthly_fee, es.amps, es.cost_per_amp, es.start_date, es.end_date, es.status as subscription_status,
+                       es.id as subscription_id, es.type, es.monthly_fee, es.amps, es.cost_per_amp, es.start_date, es.end_date, es.status as subscription_status, es.price_per_kwh, es.last_meter_reading,
                        (SELECT current_reading FROM electricity_meter_readings WHERE apartment_id = a.id ORDER BY reading_date DESC, id DESC LIMIT 1) as last_reading,
-                       (SELECT SUM(amount - amount_paid) FROM electricity_invoices WHERE apartment_id = a.id AND type IN ('Subscription', 'Fixed Subscription') AND status != 'Paid') as unpaid_balance,
-                       (SELECT SUM(amount_paid) FROM electricity_invoices WHERE apartment_id = a.id AND type IN ('Subscription', 'Fixed Subscription')) as paid_amount
+                       (SELECT SUM(amount - amount_paid) FROM electricity_invoices WHERE apartment_id = a.id AND type IN ('Subscription', 'Fixed Subscription', 'Meter') AND status != 'Paid') as unpaid_balance,
+                       (SELECT SUM(amount_paid) FROM electricity_invoices WHERE apartment_id = a.id AND type IN ('Subscription', 'Fixed Subscription', 'Meter')) as paid_amount
                 FROM apartments a
                 LEFT JOIN electricity_subscriptions es ON a.id = es.apartment_id
                 LEFT JOIN contracts c ON a.id = c.apartment_id AND c.status IN ('Active', 'Approved')
@@ -109,52 +109,304 @@ class ElectricityController {
             $data = json_decode(file_get_contents("php://input"), true);
             $apartment_id = $apartment_id ?? $data['apartment_id'];
             
-            $amps = floatval($data['amps'] ?? 0);
+            $amps      = floatval($data['amps'] ?? 0);
             $costPerAmp = floatval($data['cost_per_amp'] ?? 0);
-            
-            // Calculate monthly fee if Amps are provided, else use provided fee
-            $monthlyFee = ($amps > 0 && $costPerAmp > 0) ? ($amps * $costPerAmp) : floatval($data['monthly_fee'] ?? 0);
-            
-            $endDate = !empty($data['end_date']) ? $data['end_date'] : null;
+            $monthlyFee = ($amps > 0 && $costPerAmp > 0)
+                ? ($amps * $costPerAmp)
+                : floatval($data['monthly_fee'] ?? 0);
 
-            $stmt = $this->db->prepare("
-                INSERT INTO electricity_subscriptions (apartment_id, monthly_fee, amps, cost_per_amp, start_date, end_date, next_billing_date, status)
-                VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(?, INTERVAL 1 MONTH), ?)
-                ON DUPLICATE KEY UPDATE monthly_fee = ?, amps = ?, cost_per_amp = ?, end_date = ?, status = ?
-            ");
-            $stmt->execute([
-                $apartment_id,
-                $monthlyFee,
-                $amps,
-                $costPerAmp,
-                $data['start_date'],
-                $endDate,
-                $data['start_date'],
-                $data['status'] ?? 'Active',
-                $monthlyFee,
-                $amps,
-                $costPerAmp,
-                $endDate,
-                $data['status'] ?? 'Active'
-            ]);
+            $type = $data['type'] ?? 'Meter';
 
-            // Automatically generate or update an invoice for this Subscription month
-            if (($data['status'] ?? 'Active') === 'Active' && $monthlyFee > 0) {
-                $monthStr = date('Y-m', strtotime($data['start_date']));
-                $invCheck = $this->db->prepare("SELECT id FROM electricity_invoices WHERE apartment_id = ? AND type IN ('Subscription', 'Fixed Subscription') AND DATE_FORMAT(due_date, '%Y-%m') = ?");
-                $invCheck->execute([$apartment_id, $monthStr]);
-                if (!$invCheck->fetch()) {
-                    $invStmt = $this->db->prepare("INSERT INTO electricity_invoices (apartment_id, type, amount, due_date) VALUES (?, 'Subscription', ?, ?)");
-                    // Invoice due date same as start date (usually paid in advance)
-                    $invStmt->execute([$apartment_id, $monthlyFee, $data['start_date']]);
-                } else {
-                    // Update if unpaid
-                    $invStmt = $this->db->prepare("UPDATE electricity_invoices SET amount = ? WHERE apartment_id = ? AND type IN ('Subscription', 'Fixed Subscription') AND DATE_FORMAT(due_date, '%Y-%m') = ? AND status = 'Unpaid'");
-                    $invStmt->execute([$monthlyFee, $apartment_id, $monthStr]);
+            // RBAC: Agents cannot create subscriptions for Terminated tenants
+            $currentUser = AuthMiddleware::requireLogin();
+            if (isset($currentUser['role']) && $currentUser['role'] === 'agent') {
+                $tStmt = $this->db->prepare("
+                    SELECT t.status 
+                    FROM contracts c 
+                    JOIN tenants t ON c.tenant_id = t.id 
+                    WHERE c.apartment_id = ? 
+                    ORDER BY c.id DESC LIMIT 1
+                ");
+                $tStmt->execute([$apartment_id]);
+                $tRecord = $tStmt->fetch();
+                if ($tRecord && $tRecord['status'] === 'Terminated') {
+                    http_response_code(403);
+                    echo json_encode(['error' => 'Agents are not authorized to create subscriptions for Terminated tenants.']);
+                    return;
                 }
             }
-            echo json_encode(['message' => 'Subscription saved successfully']);
-        } catch (PDOException $e) {
+
+            // ─── Auto-compute dates (server-authoritative with client override) ───
+            $startDate       = !empty($data['start_date']) ? $data['start_date'] : date('Y-m-d');
+            $endDate         = !empty($data['end_date']) ? $data['end_date'] : date('Y-m-d', strtotime($startDate . ' + 30 days'));
+            $nextBillingDate = !empty($data['next_billing_date']) ? $data['next_billing_date'] : $endDate;
+            // ──────────────────────────────────────────────────────────────────
+
+            $price_per_kwh      = isset($data['price_per_kwh'])      ? floatval($data['price_per_kwh'])      : null;
+            $last_meter_reading = isset($data['starting_reading'])   ? floatval($data['starting_reading'])
+                                : (isset($data['last_meter_reading']) ? floatval($data['last_meter_reading']) : null);
+
+            $this->db->beginTransaction();
+
+            // Check if a subscription already exists for this apartment
+            $checkStmt = $this->db->prepare("SELECT * FROM electricity_subscriptions WHERE apartment_id = ?");
+            $checkStmt->execute([$apartment_id]);
+            $existing = $checkStmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($existing) {
+                // ── UPDATE existing subscription ──────────────────────────────
+                $stmt = $this->db->prepare("
+                    UPDATE electricity_subscriptions
+                    SET type              = ?,
+                        monthly_fee       = ?,
+                        amps              = ?,
+                        cost_per_amp      = ?,
+                        start_date        = ?,
+                        end_date          = ?,
+                        next_billing_date = ?,
+                        status            = ?,
+                        price_per_kwh     = ?,
+                        last_meter_reading = ?
+                    WHERE apartment_id = ?
+                ");
+                $stmt->execute([
+                    $type, $monthlyFee, $amps, $costPerAmp,
+                    $startDate, $endDate, $nextBillingDate,
+                    $data['status'] ?? 'Active',
+                    $price_per_kwh, $last_meter_reading,
+                    $apartment_id
+                ]);
+                $subscription_id = $existing['id'];
+
+                // Log history
+                $histStmt = $this->db->prepare(
+                    "INSERT INTO subscription_history (subscription_id, action, previous_value, new_value, reason, performed_by)
+                     VALUES (?, 'Updated', ?, ?, 'Admin Update', ?)"
+                );
+                $histStmt->execute([
+                    $subscription_id,
+                    json_encode($existing),
+                    json_encode(array_merge($existing, [
+                        'type' => $type, 'monthly_fee' => $monthlyFee,
+                        'amps' => $amps, 'cost_per_amp' => $costPerAmp,
+                        'start_date' => $startDate, 'end_date' => $endDate,
+                        'status' => $data['status'] ?? 'Active'
+                    ])),
+                    $data['user_id'] ?? 1
+                ]);
+            } else {
+                // ── INSERT new subscription ───────────────────────────────────
+                $stmt = $this->db->prepare("
+                    INSERT INTO electricity_subscriptions
+                        (apartment_id, type, monthly_fee, amps, cost_per_amp,
+                         start_date, end_date, next_billing_date,
+                         status, price_per_kwh, last_meter_reading)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $stmt->execute([
+                    $apartment_id, $type, $monthlyFee, $amps, $costPerAmp,
+                    $startDate, $endDate, $nextBillingDate,
+                    $data['status'] ?? 'Active',
+                    $price_per_kwh, $last_meter_reading
+                ]);
+                $subscription_id = $this->db->lastInsertId();
+
+                // Log history
+                $histStmt = $this->db->prepare(
+                    "INSERT INTO subscription_history (subscription_id, action, previous_value, new_value, reason, performed_by)
+                     VALUES (?, 'Created', NULL, ?, 'New Subscription', ?)"
+                );
+                $histStmt->execute([
+                    $subscription_id,
+                    json_encode(['type' => $type, 'monthly_fee' => $monthlyFee,
+                                 'amps' => $amps, 'cost_per_amp' => $costPerAmp,
+                                 'start_date' => $startDate, 'end_date' => $endDate,
+                                 'status' => $data['status'] ?? 'Active']),
+                    $data['user_id'] ?? 1
+                ]);
+            }
+
+            // ── Baseline or initial meter reading for Meter-type subscriptions ────────────
+            if ($type === 'Meter') {
+                if (isset($data['starting_reading']) && trim($data['starting_reading']) !== '') {
+                    $baselineReading = floatval($data['starting_reading']);
+                    $pricePerKwh     = floatval($price_per_kwh ?? 0);
+
+                    // Insert baseline record with consumption = 0 and bill_amount = 0 as verified opening meter
+                    $baseStmt = $this->db->prepare("
+                        INSERT INTO electricity_meter_readings
+                            (apartment_id, previous_reading, current_reading, price_per_kwh,
+                             consumption, bill_amount, reading_date, status, submitted_by)
+                        VALUES (?, ?, ?, ?, 0, 0, ?, 'Verified', ?)
+                    ");
+                    $baseStmt->execute([
+                        $apartment_id, $baselineReading, $baselineReading, $pricePerKwh,
+                        $startDate, $data['user_id'] ?? 1
+                    ]);
+
+                    // Update last_meter_reading on subscription record
+                    $this->db->prepare("UPDATE electricity_subscriptions SET last_meter_reading = ? WHERE id = ?")
+                             ->execute([$baselineReading, $subscription_id]);
+                } else if (isset($data['current_reading']) && trim($data['current_reading']) !== '') {
+                    $startReading  = floatval($last_meter_reading ?? 0);
+                    $currentReading = floatval($data['current_reading']);
+                    $pricePerKwh   = floatval($price_per_kwh ?? 0);
+                    $consumption   = max(0, $currentReading - $startReading);
+                    $billAmount    = $consumption * $pricePerKwh;
+
+                    $meterStmt = $this->db->prepare("
+                        INSERT INTO electricity_meter_readings
+                            (apartment_id, previous_reading, current_reading, price_per_kwh,
+                             consumption, bill_amount, reading_date, status, submitted_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending Verification', ?)
+                    ");
+                    $meterStmt->execute([
+                        $apartment_id, $startReading, $currentReading, $pricePerKwh,
+                        $consumption, $billAmount, $endDate, $data['user_id'] ?? 1
+                    ]);
+
+                    // Generate corresponding meter invoice
+                    $this->db->prepare(
+                        "INSERT INTO electricity_invoices (apartment_id, type, amount, due_date)
+                         VALUES (?, 'Meter', ?, ?)"
+                    )->execute([$apartment_id, $billAmount, $endDate]);
+                }
+            }
+
+            // ── Auto-generate subscription invoice for Fixed plans ────────────
+            if (($data['status'] ?? 'Active') === 'Active' && $monthlyFee > 0 && $type !== 'Meter') {
+                $monthStr = date('Y-m', strtotime($startDate));
+                $invCheck = $this->db->prepare(
+                    "SELECT id FROM electricity_invoices
+                     WHERE apartment_id = ?
+                       AND type IN ('Subscription', 'Fixed Subscription')
+                       AND DATE_FORMAT(due_date, '%Y-%m') = ?"
+                );
+                $invCheck->execute([$apartment_id, $monthStr]);
+                if (!$invCheck->fetch()) {
+                    $this->db->prepare(
+                        "INSERT INTO electricity_invoices (apartment_id, type, amount, due_date)
+                         VALUES (?, 'Subscription', ?, ?)"
+                    )->execute([$apartment_id, $monthlyFee, $startDate]);
+                } else {
+                    $this->db->prepare(
+                        "UPDATE electricity_invoices SET amount = ?
+                         WHERE apartment_id = ?
+                           AND type IN ('Subscription', 'Fixed Subscription')
+                           AND DATE_FORMAT(due_date, '%Y-%m') = ?
+                           AND status = 'Unpaid'"
+                    )->execute([$monthlyFee, $apartment_id, $monthStr]);
+                }
+            }
+
+            $this->db->commit();
+            echo json_encode([
+                'message'    => 'Subscription saved successfully',
+                'start_date' => $startDate,
+                'end_date'   => $endDate,
+            ]);
+        } catch (Exception $e) {
+            if ($this->db->inTransaction()) $this->db->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+    }
+
+    public function switchPlan($apartment_id, $sub_id) {
+        try {
+            $data = json_decode(file_get_contents("php://input"), true) ?: $_POST;
+            $newPricePerKwh = floatval($data['price_per_kwh'] ?? 0);
+            $initialReading = floatval($data['initial_reading'] ?? 0);
+
+            $this->db->beginTransaction();
+
+            // 1. Fetch current subscription
+            $stmt = $this->db->prepare("SELECT * FROM electricity_subscriptions WHERE id = ? AND apartment_id = ?");
+            $stmt->execute([$sub_id, $apartment_id]);
+            $currentSub = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$currentSub || $currentSub['type'] === 'Meter') {
+                throw new Exception("Invalid subscription or already on a Meter plan.");
+            }
+
+            // 2. Proration Logic
+            $startDate = new DateTime($currentSub['start_date']);
+            $currentDate = new DateTime(); // Today
+            
+            // If the start date is in the future, days used is 0
+            if ($startDate > $currentDate) {
+                $daysUsed = 0;
+            } else {
+                $daysUsed = $startDate->diff($currentDate)->days;
+            }
+
+            $monthlyFee = floatval($currentSub['monthly_fee']);
+            $dailyRate = $monthlyFee / 30; // 30-day month average for proration
+            $proratedAmount = round($dailyRate * $daysUsed, 2);
+
+            // 3. Generate Prorated Invoice
+            if ($proratedAmount > 0) {
+                $invStmt = $this->db->prepare("
+                    INSERT INTO electricity_invoices (apartment_id, type, amount, due_date, notes)
+                    VALUES (?, 'Prorated Switch', ?, ?, 'Prorated charge for switching plan mid-cycle')
+                ");
+                $invStmt->execute([$apartment_id, $proratedAmount, $currentDate->format('Y-m-d')]);
+            }
+
+            // 4. Update Subscription
+            $nextBillingDate = clone $currentDate;
+            $nextBillingDate->modify('+1 month');
+
+            $updateStmt = $this->db->prepare("
+                UPDATE electricity_subscriptions
+                SET type = 'Meter',
+                    start_date = ?,
+                    next_billing_date = ?,
+                    last_meter_reading = ?,
+                    price_per_kwh = ?,
+                    amps = 0,
+                    monthly_fee = 0
+                WHERE id = ?
+            ");
+            $updateStmt->execute([
+                $currentDate->format('Y-m-d'),
+                $nextBillingDate->format('Y-m-d'),
+                $initialReading,
+                $newPricePerKwh,
+                $sub_id
+            ]);
+
+            $this->db->commit();
+            echo json_encode(['message' => 'Plan switched to Meter successfully.']);
+        } catch (Exception $e) {
+            $this->db->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+    }
+
+    public function updateFee($apartment_id, $sub_id) {
+        try {
+            $data = json_decode(file_get_contents("php://input"), true);
+            $newFee = floatval($data['monthly_fee'] ?? 0);
+            
+            $this->db->beginTransaction();
+            
+            $stmt = $this->db->prepare("UPDATE electricity_subscriptions SET monthly_fee = ? WHERE id = ? AND apartment_id = ?");
+            $stmt->execute([$newFee, $sub_id, $apartment_id]);
+            
+            // Also update any unpaid current subscription invoice
+            $updInv = $this->db->prepare("UPDATE electricity_invoices SET amount = ? WHERE apartment_id = ? AND type IN ('Subscription', 'Fixed Subscription') AND status = 'Unpaid'");
+            $updInv->execute([$newFee, $apartment_id]);
+            
+            // Log history
+            $histStmt = $this->db->prepare("INSERT INTO subscription_history (subscription_id, action, previous_value, new_value, reason, performed_by) VALUES (?, 'Updated Fee', NULL, ?, 'Admin changed fee inline', ?)");
+            $histStmt->execute([$sub_id, $newFee, $data['user_id'] ?? 1]);
+
+            $this->db->commit();
+            echo json_encode(['message' => 'Monthly fee updated successfully']);
+        } catch (Exception $e) {
+            $this->db->rollBack();
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -332,12 +584,18 @@ class ElectricityController {
             ]);
 
             // Update next_billing_date, start_date, end_date for the subscription
+            // Also update last_meter_reading to the new current reading
             $subStmt = $this->db->prepare("
                 UPDATE electricity_subscriptions 
-                SET start_date = ?, end_date = ?, next_billing_date = DATE_ADD(?, INTERVAL 1 MONTH) 
+                SET start_date = ?, 
+                    end_date = DATE_ADD(?, INTERVAL 1 MONTH), 
+                    next_billing_date = DATE_ADD(?, INTERVAL 1 MONTH),
+                    last_meter_reading = ?
                 WHERE apartment_id = ?
             ");
-            $subStmt->execute([$data['start_date'], $data['end_date'], $data['end_date'], $apartment_id]);
+            // The old end_date becomes the new start_date
+            $newStartDate = $data['end_date'];
+            $subStmt->execute([$newStartDate, $newStartDate, $newStartDate, $data['current_reading'], $apartment_id]);
 
             $this->db->commit();
             echo json_encode(['message' => 'Meter reading saved and invoice generated', 'consumption' => $consumption, 'bill_amount' => $bill_amount]);
@@ -393,7 +651,7 @@ class ElectricityController {
                 SELECT ei.*, es.amps, es.cost_per_amp, es.monthly_fee
                 FROM electricity_invoices ei
                 LEFT JOIN electricity_subscriptions es ON ei.apartment_id = es.apartment_id
-                WHERE ei.apartment_id = ? AND (ei.type IN ('Subscription', 'Fixed Subscription') OR ei.type = '')
+                WHERE ei.apartment_id = ? AND (ei.type IN ('Subscription', 'Fixed Subscription', 'Meter') OR ei.type = '')
                 ORDER BY ei.due_date DESC
             ");
             $stmt->execute([$apartment_id]);

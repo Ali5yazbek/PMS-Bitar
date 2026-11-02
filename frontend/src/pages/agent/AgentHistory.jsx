@@ -8,6 +8,14 @@ const AgentHistory = () => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('generators');
 
+  const getFullImageUrl = (path) => {
+    if (!path) return null;
+    if (path.startsWith('http')) return path;
+    const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost/Bitar/backend/api';
+    const baseUrl = apiUrl.replace('/backend/api', '');
+    return `${baseUrl}/${path}`;
+  };
+
   // Fetching history. Since we might not have the endpoints yet, we'll try catching errors.
   const { data: genHistory = [], isLoading: genLoading } = useQuery({
     queryKey: ['agent_gen_history'],
@@ -107,8 +115,8 @@ const AgentHistory = () => {
                       <td className="p-4 text-slate-300">{item.building_name}</td>
                       <td className="p-4 text-slate-300">{item.generator_counter}</td>
                       <td className="p-4 text-slate-300">
-                        {item.meter_photo_url && <a href={item.meter_photo_url} target="_blank" rel="noreferrer" className="text-info hover:underline text-sm block">Meter</a>}
-                        {item.fuel_photo_url && <a href={item.fuel_photo_url} target="_blank" rel="noreferrer" className="text-info hover:underline text-sm block mt-1">Fuel</a>}
+                        {item.meter_photo_url && <a href={getFullImageUrl(item.meter_photo_url)} target="_blank" rel="noreferrer" className="text-info hover:underline text-sm block">Meter</a>}
+                        {item.fuel_photo_url && <a href={getFullImageUrl(item.fuel_photo_url)} target="_blank" rel="noreferrer" className="text-info hover:underline text-sm block mt-1">Fuel</a>}
                       </td>
                       <td className="p-4">{getStatusBadge(item.status)}</td>
                       <td className="p-4 text-slate-400 text-sm max-w-xs truncate">{item.admin_notes || '-'}</td>
@@ -154,7 +162,7 @@ const AgentHistory = () => {
                       <td className="p-4 text-white font-bold">{item.current_reading} kWh</td>
                       <td className="p-4 text-info font-medium">+{item.consumption} kWh</td>
                       <td className="p-4 text-slate-300">
-                        {item.meter_photo_url ? <a href={item.meter_photo_url} target="_blank" rel="noreferrer" className="text-primary hover:underline text-sm block">View Photo</a> : '-'}
+                        {item.meter_photo_url ? <a href={getFullImageUrl(item.meter_photo_url)} target="_blank" rel="noreferrer" className="text-primary hover:underline text-sm block">View Photo</a> : '-'}
                       </td>
                       <td className="p-4">{getStatusBadge(item.status)}</td>
                       <td className="p-4 text-slate-400 text-sm max-w-xs truncate">{item.admin_notes || '-'}</td>

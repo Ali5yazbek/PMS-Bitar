@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import React from 'react';
+import PrintLogo from './PrintLogo';
 
 const SupplierPrintLayout = ({ supplierDetails }) => {
   const { t } = useTranslation();
@@ -12,6 +13,7 @@ const SupplierPrintLayout = ({ supplierDetails }) => {
       {/* Header */}
       <div className="flex justify-between items-start border-b-2 border-slate-800 pb-6 mb-6">
         <div>
+          <PrintLogo className="h-16 w-auto object-contain mb-2" />
           <h1 className="text-3xl font-bold font-serif text-slate-900 tracking-tight">{t('supplierprintlayout.bitar_enterprises', { defaultValue: `BITAR ENTERPRISES` })}</h1>
           <div className="text-sm text-slate-600 mt-1">
             <p>{t('supplierprintlayout.123_construction_blvd_industry', { defaultValue: `123 Construction Blvd, Industry City` })}</p>

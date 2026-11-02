@@ -19,6 +19,7 @@ const Suppliers = () => {
   const [selectedSupplierId, setSelectedSupplierId] = useState(null);
   const [activeTab, setActiveTab] = useState('Overview');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [selectedPO, setSelectedPO] = useState(null);
   const [paymentData, setPaymentData] = useState({ 
     amount: '', payment_date: new Date().toISOString().split('T')[0], 
     payment_method: 'Bank Transfer', reference_number: '', bank_name: '', notes: '' 
@@ -69,12 +70,35 @@ const Suppliers = () => {
       queryClient.invalidateQueries(['supplier', selectedSupplierId]);
       queryClient.invalidateQueries(['supplierDashboard']);
       setShowPaymentModal(false);
+      setSelectedPO(null);
       setPaymentData({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_method: 'Bank Transfer', reference_number: '', bank_name: '', notes: '' });
     },
     onError: (err) => {
       alert(err.response?.data?.error || 'Failed to record payment');
     }
   });
+
+  const handleOpenPaymentModal = (po = null) => {
+    setSelectedPO(po);
+    const maxAmt = po ? Number(po.remaining_balance || 0) : Number(supplierDetails?.summary?.currentBalance || 0);
+    setPaymentData({ 
+      amount: maxAmt > 0 ? maxAmt : '', 
+      payment_date: new Date().toISOString().split('T')[0], 
+      payment_method: 'Bank Transfer', 
+      reference_number: '', 
+      bank_name: '', 
+      notes: po ? `Payment for Invoice #${po.po_number}` : '' 
+    });
+    setShowPaymentModal(true);
+  };
+
+  const handleConfirmPayment = () => {
+    const payload = {
+      ...paymentData,
+      purchase_order_id: selectedPO ? selectedPO.id : undefined
+    };
+    paymentMutation.mutate(payload);
+  };
 
   const filtered = suppliers?.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
@@ -199,9 +223,15 @@ const Suppliers = () => {
               </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => setShowPaymentModal(true)} className="bg-success hover:bg-emerald-600 px-4 py-2 rounded-lg text-white flex items-center gap-2">
-                <DollarSign size={18} /> {t('suppliers.record_payment', { defaultValue: `Record Payment` })}
-              </button>
+              {Number(supplierDetails.summary.currentBalance || 0) <= 0 ? (
+                <div className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
+                  <CheckCircle size={18} /> {t('suppliers.fully_paid', { defaultValue: `Fully Paid` })}
+                </div>
+              ) : (
+                <button onClick={() => handleOpenPaymentModal(null)} className="bg-success hover:bg-emerald-600 px-4 py-2 rounded-lg text-white flex items-center gap-2 font-medium transition-colors shadow-lg shadow-emerald-950/20">
+                  <DollarSign size={18} /> {t('suppliers.record_payment', { defaultValue: `Record Payment` })}
+                </button>
+              )}
               <button onClick={handlePrint} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-white flex items-center gap-2">
                 <Printer size={18} /> {t('suppliers.print_statement', { defaultValue: `Print Statement` })}
               </button>
@@ -277,24 +307,42 @@ const Suppliers = () => {
                     <th className="py-3 font-medium">{t('suppliers.date', { defaultValue: `Date` })}</th>
                     <th className="py-3 font-medium">{t('suppliers.due_date', { defaultValue: `Due Date` })}</th>
                     <th className="py-3 font-medium">{t('suppliers.amount', { defaultValue: `Amount` })}</th>
+                    <th className="py-3 font-medium">{t('suppliers.paid', { defaultValue: `Paid` })}</th>
                     <th className="py-3 font-medium">{t('suppliers.remaining', { defaultValue: `Remaining` })}</th>
                     <th className="py-3 font-medium">{t('suppliers.status', { defaultValue: `Status` })}</th>
+                    <th className="py-3 font-medium text-right">{t('suppliers.action', { defaultValue: `Action` })}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {supplierDetails.purchases.map(po => {
-                    const isOverdue = po.remaining_balance > 0 && new Date(po.due_date) < new Date();
+                    const isOverdue = Number(po.remaining_balance) > 0 && po.due_date && new Date(po.due_date) < new Date();
+                    const isFullyPaid = po.payment_status === 'Paid' || Number(po.remaining_balance) <= 0;
                     return (
                     <tr key={po.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                       <td className="py-3 text-white font-medium">{po.po_number}</td>
                       <td className="py-3 text-slate-300">{po.invoice_date}</td>
                       <td className={`py-3 ${isOverdue ? 'text-red-400 font-bold' : 'text-slate-300'}`}>{po.due_date}</td>
                       <td className="py-3 text-white">{t('suppliers.cfa', { defaultValue: `CFA` })} {Number(po.total_price).toLocaleString()}</td>
+                      <td className="py-3 text-emerald-400">{t('suppliers.cfa', { defaultValue: `CFA` })} {Number(po.amount_paid || 0).toLocaleString()}</td>
                       <td className="py-3 text-amber-400">{t('suppliers.cfa', { defaultValue: `CFA` })} {Number(po.remaining_balance).toLocaleString()}</td>
                       <td className="py-3">
-                         <span className={`px-2 py-1 rounded text-[10px] uppercase font-bold ${po.payment_status === 'Paid' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
-                           {isOverdue ? 'Overdue' : po.payment_status}
+                         <span className={`px-2 py-1 rounded text-[10px] uppercase font-bold ${isFullyPaid ? 'bg-emerald-500/20 text-emerald-400' : isOverdue ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                           {isFullyPaid ? 'Paid' : isOverdue ? 'Overdue' : po.payment_status}
                          </span>
+                      </td>
+                      <td className="py-3 text-right">
+                        {isFullyPaid ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-400 text-xs font-semibold">
+                            <CheckCircle size={14} /> Paid
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleOpenPaymentModal(po)}
+                            className="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 rounded text-xs font-medium transition-colors"
+                          >
+                            Pay Invoice
+                          </button>
+                        )}
                       </td>
                     </tr>
                     );
@@ -396,66 +444,123 @@ const Suppliers = () => {
         </div>
       )}
 
-      {showPaymentModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="glass-panel w-full max-w-md p-6">
-            <h2 className="text-xl font-bold text-white mb-6">{t('suppliers.record_payment', { defaultValue: `Record Payment` })}</h2>
-            
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="block text-muted mb-1">{t('suppliers.amount', { defaultValue: `Amount` })}</label>
-                <input type="number" value={paymentData.amount} onChange={e => setPaymentData({...paymentData, amount: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-muted mb-1">{t('suppliers.date', { defaultValue: `Date` })}</label>
-                  <input type="date" value={paymentData.payment_date} onChange={e => setPaymentData({...paymentData, payment_date: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white" />
-                </div>
-                <div>
-                  <label className="block text-muted mb-1">{t('suppliers.method', { defaultValue: `Method` })}</label>
-                  <select value={paymentData.payment_method} onChange={e => setPaymentData({...paymentData, payment_method: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white">
-                    <option>Bank Transfer</option>
-                    <option>Cash</option>
-                    <option>Check</option>
-                  </select>
-                </div>
-              </div>
-              {paymentData.payment_method !== 'Cash' && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-muted mb-1">{t('suppliers.bank_name', { defaultValue: `Bank Name` })}</label>
-                    <input type="text" value={paymentData.bank_name} onChange={e => setPaymentData({...paymentData, bank_name: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white" />
-                  </div>
-                  <div>
-                    <label className="block text-muted mb-1">{t('suppliers.ref_check', { defaultValue: `Ref / Check #` })}</label>
-                    <input type="text" value={paymentData.reference_number} onChange={e => setPaymentData({...paymentData, reference_number: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white" />
-                  </div>
-                </div>
-              )}
-              {paymentData.payment_method === 'Cash' && (
-                <div>
-                  <label className="block text-muted mb-1">{t('suppliers.ref_check', { defaultValue: `Ref / Check #` })}</label>
-                  <input type="text" value={paymentData.reference_number} onChange={e => setPaymentData({...paymentData, reference_number: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white" />
-                </div>
-              )}
-              <div>
-                <label className="block text-muted mb-1">{t('suppliers.notes', { defaultValue: `Notes` })}</label>
-                <textarea value={paymentData.notes} onChange={e => setPaymentData({...paymentData, notes: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white h-20" />
-              </div>
-              <div className="p-3 bg-indigo-500/10 border border-indigo-500/30 rounded text-xs text-indigo-300">
-                {t('suppliers.this_is_a_general_payment_it_w', { defaultValue: `This is a general payment. It will automatically allocate to the oldest unpaid invoices first (FIFO).` })}
-              </div>
-            </div>
+      {showPaymentModal && (() => {
+        const maxPayable = selectedPO ? Number(selectedPO.remaining_balance || 0) : Number(supplierDetails?.summary?.currentBalance || 0);
+        const isOverpaying = Number(paymentData.amount) > maxPayable;
 
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowPaymentModal(false)} className="px-4 py-2 bg-slate-700 text-white rounded-lg">{t('suppliers.cancel', { defaultValue: `Cancel` })}</button>
-              <button onClick={() => paymentMutation.mutate(paymentData)} disabled={paymentMutation.isPending || !paymentData.amount} className="px-4 py-2 bg-success text-white rounded-lg disabled:opacity-50 flex items-center gap-2">
-                {paymentMutation.isPending ? 'Processing...' : 'Confirm Payment'}
-              </button>
+        return (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="glass-panel w-full max-w-md p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold text-white">
+                    {selectedPO ? `Pay Invoice #${selectedPO.po_number}` : t('suppliers.record_payment', { defaultValue: `Record Payment` })}
+                  </h2>
+                  <button onClick={() => { setShowPaymentModal(false); setSelectedPO(null); }} className="text-slate-400 hover:text-white">✕</button>
+                </div>
+
+                {selectedPO ? (
+                  <div className="p-3 bg-indigo-500/15 border border-indigo-500/30 rounded-lg text-xs text-indigo-300 flex justify-between items-center mb-4">
+                    <div>
+                      <span className="font-bold text-white">Target Invoice: #{selectedPO.po_number}</span> ({selectedPO.item_name})
+                      <div className="text-muted text-[11px] mt-0.5">Total: CFA {Number(selectedPO.total_price).toLocaleString()} • Paid: CFA {Number(selectedPO.amount_paid || 0).toLocaleString()}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-amber-400 font-bold text-sm">CFA {Number(selectedPO.remaining_balance).toLocaleString()}</div>
+                      <div className="text-[10px] text-muted">Remaining Balance</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-indigo-500/15 border border-indigo-500/30 rounded-lg text-xs text-indigo-300 flex justify-between items-center mb-4">
+                    <div>
+                      <span className="font-bold text-white">General Payment (FIFO Allocation)</span>
+                      <div className="text-muted text-[11px] mt-0.5">Automatically pays oldest unpaid invoices first</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-amber-400 font-bold text-sm">CFA {Number(supplierDetails.summary.currentBalance).toLocaleString()}</div>
+                      <div className="text-[10px] text-muted">Total Outstanding</div>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="space-y-4 mb-6">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-muted text-sm">{t('suppliers.amount', { defaultValue: `Amount` })} (CFA)</label>
+                      {maxPayable > 0 && (
+                        <button 
+                          type="button" 
+                          onClick={() => setPaymentData({...paymentData, amount: maxPayable})}
+                          className="text-xs text-primary hover:text-indigo-400 font-medium underline"
+                        >
+                          Pay Full (CFA {Number(maxPayable).toLocaleString()})
+                        </button>
+                      )}
+                    </div>
+                    <input 
+                      type="number" 
+                      max={maxPayable}
+                      value={paymentData.amount} 
+                      onChange={e => setPaymentData({...paymentData, amount: e.target.value})} 
+                      className={`w-full bg-slate-800 border ${isOverpaying ? 'border-red-500 focus:border-red-500' : 'border-slate-700 focus:border-primary'} rounded-lg px-3 py-2 text-white`} 
+                    />
+                    {isOverpaying && (
+                      <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                        <AlertTriangle size={12} /> Amount cannot exceed remaining balance of CFA {Number(maxPayable).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-muted text-xs mb-1">{t('suppliers.date', { defaultValue: `Date` })}</label>
+                      <input type="date" value={paymentData.payment_date} onChange={e => setPaymentData({...paymentData, payment_date: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-muted text-xs mb-1">{t('suppliers.method', { defaultValue: `Method` })}</label>
+                      <select value={paymentData.payment_method} onChange={e => setPaymentData({...paymentData, payment_method: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                        <option>Bank Transfer</option>
+                        <option>Cash</option>
+                        <option>Check</option>
+                      </select>
+                    </div>
+                  </div>
+                  {paymentData.payment_method !== 'Cash' && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-muted text-xs mb-1">{t('suppliers.bank_name', { defaultValue: `Bank Name` })}</label>
+                        <input type="text" value={paymentData.bank_name} onChange={e => setPaymentData({...paymentData, bank_name: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                      </div>
+                      <div>
+                        <label className="block text-muted text-xs mb-1">{t('suppliers.ref_check', { defaultValue: `Ref / Check #` })}</label>
+                        <input type="text" value={paymentData.reference_number} onChange={e => setPaymentData({...paymentData, reference_number: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                      </div>
+                    </div>
+                  )}
+                  {paymentData.payment_method === 'Cash' && (
+                    <div>
+                      <label className="block text-muted text-xs mb-1">{t('suppliers.ref_check', { defaultValue: `Ref / Check #` })}</label>
+                      <input type="text" value={paymentData.reference_number} onChange={e => setPaymentData({...paymentData, reference_number: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-muted text-xs mb-1">{t('suppliers.notes', { defaultValue: `Notes` })}</label>
+                    <textarea value={paymentData.notes} onChange={e => setPaymentData({...paymentData, notes: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white h-16 text-sm" />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3">
+                  <button onClick={() => { setShowPaymentModal(false); setSelectedPO(null); }} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm transition-colors">{t('suppliers.cancel', { defaultValue: `Cancel` })}</button>
+                  <button 
+                    onClick={handleConfirmPayment} 
+                    disabled={paymentMutation.isPending || !paymentData.amount || Number(paymentData.amount) <= 0 || isOverpaying || maxPayable <= 0} 
+                    className="px-4 py-2 bg-success hover:bg-emerald-600 text-white rounded-lg disabled:opacity-50 flex items-center gap-2 text-sm font-medium transition-colors"
+                  >
+                    {paymentMutation.isPending ? 'Processing...' : 'Confirm Payment'}
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          );
+        })()}
 
       <SupplierPrintLayout supplierDetails={supplierDetails} />
     </div>

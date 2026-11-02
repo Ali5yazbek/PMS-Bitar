@@ -1,0 +1,1 @@
+<?php require "core/Database.php"; $db = Database::getInstance()->getConnection(); $db->query("UPDATE daily_logs SET calculated_hours_worked = 22, expected_factory_fuel_burn = 22 * 10 WHERE id = 29"); $db->query("UPDATE generator_daily_reports SET running_hours = 22 WHERE date = CURDATE() AND generator_id = 12"); echo "Fixed";

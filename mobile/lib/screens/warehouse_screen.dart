@@ -315,9 +315,93 @@ class _ProductDetailsSheet extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () {
+                  Navigator.pop(context); // Close the detail sheet first
+                  String name = product['name'] ?? '';
+                  String unit = product['unit'] ?? 'pcs';
+                  String minQty = (product['minimum_quantity'] ?? 0).toString();
+                  
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (context) => StatefulBuilder(
+                      builder: (context, setState) => Container(
+                        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+                        decoration: const BoxDecoration(
+                          color: AppTheme.surface,
+                          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                        ),
+                        child: SafeArea(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Edit Product', style: GoogleFonts.outfit(fontSize: 20, color: Colors.white, fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 24),
+                                TextField(
+                                  decoration: const InputDecoration(labelText: 'Name', labelStyle: TextStyle(color: AppTheme.textSecondary)),
+                                  style: const TextStyle(color: Colors.white),
+                                  onChanged: (v) => name = v,
+                                  controller: TextEditingController(text: name)..selection = TextSelection.collapsed(offset: name.length),
+                                ),
+                                const SizedBox(height: 16),
+                                TextField(
+                                  decoration: const InputDecoration(labelText: 'Unit (e.g. pcs, liters)', labelStyle: TextStyle(color: AppTheme.textSecondary)),
+                                  style: const TextStyle(color: Colors.white),
+                                  onChanged: (v) => unit = v,
+                                  controller: TextEditingController(text: unit)..selection = TextSelection.collapsed(offset: unit.length),
+                                ),
+                                const SizedBox(height: 16),
+                                TextField(
+                                  decoration: const InputDecoration(labelText: 'Minimum Quantity', labelStyle: TextStyle(color: AppTheme.textSecondary)),
+                                  style: const TextStyle(color: Colors.white),
+                                  keyboardType: TextInputType.number,
+                                  onChanged: (v) => minQty = v,
+                                  controller: TextEditingController(text: minQty)..selection = TextSelection.collapsed(offset: minQty.length),
+                                ),
+                                const SizedBox(height: 24),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary))),
+                                    const SizedBox(width: 8),
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+                                      onPressed: () async {
+                                        Navigator.pop(context);
+                                        try {
+                                          await ApiService().client.put('/warehouse/products/${product['id']}', data: {
+                                            'name': name,
+                                            'unit': unit,
+                                            'minimum_quantity': minQty,
+                                          });
+                                          // Note: since this is a stateless widget method, we don't have a ref. We can't invalidate the provider easily from here without passing it.
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Product updated. Please refresh.')));
+                                          }
+                                        } catch (e) {
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+                                          }
+                                        }
+                                      },
+                                      child: const Text('Save', style: TextStyle(color: Colors.white)),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
                 icon: const Icon(Icons.edit_rounded),
-                label: const Text('Edit Product (Coming Soon)'),
+                label: const Text('Edit Product'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.surfaceHover,
                   foregroundColor: Colors.white,

@@ -4,6 +4,7 @@ import { Calendar, Download, Printer, ChevronDown, ChevronUp, Eye, Building2, Tr
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import api from '../api/axios';
+import InteractiveCurrency from '../components/common/InteractiveCurrency';
 
 const FinancialBuildingReport = () => {
   const { t } = useTranslation();
@@ -157,7 +158,7 @@ const FinancialBuildingReport = () => {
   };
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
+    return <InteractiveCurrency amountCFA={amount || 0} />;
   };
 
   if (loading && !data) {
@@ -224,7 +225,7 @@ const FinancialBuildingReport = () => {
 
   if (printMode === 'receipt' && printInvoice && viewModalData) {
     return (
-      <div className="fixed inset-0 bg-white z-[200] p-8 text-black print:block print:p-0 overflow-y-auto">
+      <div className="absolute top-0 left-0 w-full min-h-screen bg-white z-[200] p-8 text-black print:block print:p-0">
         {renderReceipt(printInvoice, viewModalData)}
       </div>
     );
@@ -232,7 +233,7 @@ const FinancialBuildingReport = () => {
 
   if (printMode === 'receipt_all' && viewModalData) {
     return (
-      <div className="fixed inset-0 bg-white z-[200] p-8 text-black print:block print:p-0 overflow-y-auto">
+      <div className="absolute top-0 left-0 w-full min-h-screen bg-white z-[200] p-8 text-black print:block print:p-0">
         {modalInvoices.map((inv, idx) => (
           <div key={idx}>
             {renderReceipt(inv, viewModalData)}
@@ -382,6 +383,7 @@ const FinancialBuildingReport = () => {
                     <thead>
                       <tr className="bg-white border-b border-gray-100">
                         <th className="py-4 px-6 text-sm font-medium text-gray-500">Apartment</th>
+                        <th className="py-4 px-6 text-sm font-medium text-gray-500">Tenant Name(s)</th>
                         <th className="py-4 px-6 text-sm font-medium text-gray-500 text-right">Income</th>
                         <th className="py-4 px-6 text-sm font-medium text-gray-500 text-right">Received</th>
                         <th className="py-4 px-6 text-sm font-medium text-gray-500 text-right">Remaining Unpaid</th>
@@ -390,17 +392,20 @@ const FinancialBuildingReport = () => {
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {building.apartments.map((apt) => (
-                        <tr key={apt.id} className="hover:bg-gray-50/50 transition-colors">
+                        <tr key={apt.id} className="hover:bg-gray-50/50 transition-colors print:break-inside-avoid">
                           <td className="py-4 px-6">
                             <span className="font-semibold text-gray-700 bg-gray-100 px-3 py-1 rounded-md">Apt {apt.code}</span>
+                          </td>
+                          <td className="py-4 px-6 text-sm text-gray-600">
+                            {apt.tenant_names_str || 'N/A'}
                           </td>
                           <td className="py-4 px-6 text-right font-medium text-gray-700">
                             {formatCurrency(apt.total_income)}
                           </td>
-                          <td className="py-4 px-6 text-right font-medium text-emerald-600">
+                          <td className="py-4 px-6 text-right font-medium text-emerald-600 print:text-black">
                             {formatCurrency(apt.total_received)}
                           </td>
-                          <td className="py-4 px-6 text-right font-medium text-rose-600">
+                          <td className="py-4 px-6 text-right font-medium text-rose-600 print:text-black">
                             {formatCurrency(apt.total_remaining)}
                           </td>
                           <td className="py-4 px-6 text-center print:hidden">

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../api/axios';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calculator, ClipboardCheck, Printer, CheckCircle, Edit3, Save, X } from 'lucide-react';
+import { ArrowLeft, Calculator, ClipboardCheck, Printer, CheckCircle, Edit3, Save, X, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 const WorkshopDetails = () => {
@@ -43,6 +43,18 @@ const WorkshopDetails = () => {
     }
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => api.delete(`/workshop/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workshopProjects'] });
+      queryClient.invalidateQueries({ queryKey: ['constructions'] });
+      navigate('/workshop');
+    },
+    onError: (err) => {
+      alert(err.response?.data?.error || t('workshop.delete_failed', { defaultValue: 'Failed to delete project' }));
+    }
+  });
+
   if (isLoading) return <div>Loading...</div>;
   if (!data || !data.project) return <div>Project not found</div>;
 
@@ -66,9 +78,23 @@ const WorkshopDetails = () => {
 
   return (
     <div className="space-y-6">
-      <button onClick={() => navigate('/workshop')} className="flex items-center gap-2 text-orange-600 hover:text-orange-800 font-medium">
-        <ArrowLeft size={20} /> Back to Workshop Projects
-      </button>
+      <div className="flex justify-between items-center">
+        <button onClick={() => navigate('/workshop')} className="flex items-center gap-2 text-orange-600 hover:text-orange-800 font-medium">
+          <ArrowLeft size={20} /> Back to Workshop Projects
+        </button>
+        <button 
+          onClick={() => {
+            if (window.confirm(t('workshop.delete_confirm', { defaultValue: `Are you sure you want to delete project "${project.name}"? This will permanently remove its estimates and specifications.` }))) {
+              deleteMutation.mutate();
+            }
+          }}
+          disabled={deleteMutation.isPending}
+          className="flex items-center gap-2 bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-700 border border-rose-200 px-4 py-2 rounded-lg font-medium transition-colors text-sm shadow-sm"
+        >
+          <Trash2 size={16} />
+          {t('workshop.delete_btn', { defaultValue: 'Delete Project' })}
+        </button>
+      </div>
 
       <div className="flex justify-between items-start bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <div>

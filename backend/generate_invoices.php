@@ -1,27 +1,16 @@
 <?php
-require_once __DIR__ . '/core/Database.php';
 require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/controllers/RentController.php';
+require_once __DIR__ . '/core/Database.php';
+require_once __DIR__ . '/services/RentGenerationService.php';
 
-// Mock AuthMiddleware so it doesn't fail
-class AuthMiddleware {
-    public static function requireLogin() {
-        return ['user_id' => 1];
-    }
+echo "Running RentGenerationService::runDaily()...\n";
+$result = RentGenerationService::runDaily();
+echo "Status: {$result['status']}\n";
+echo "Invoices created: {$result['invoices_created']}\n";
+echo "Statuses reconciled: {$result['statuses_reconciled']}\n";
+print_r($result['details']);
+if (!empty($result['errors'])) {
+    echo "Errors:\n";
+    print_r($result['errors']);
 }
-
-class AuditLogger {
-    public static function log($action, $entity, $entity_id, $description) {
-        // do nothing
-    }
-}
-
-$db = Database::getInstance()->getConnection();
-
-// Delete unpaid auto-generated invoices (so we can recreate them correctly)
-$stmt = $db->query("DELETE FROM rent_invoices WHERE id NOT IN (SELECT invoice_id FROM rent_payments) AND invoice_number NOT LIKE '%-H'");
-echo "Deleted " . $stmt->rowCount() . " invoices.\n";
-
-$controller = new RentController();
-$controller->generateInvoices();
-echo "\nDone regenerating!\n";
+echo "\nDone!\n";

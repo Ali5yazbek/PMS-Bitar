@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import axios from '../api/axios';
 import { Search, ShoppingCart, Plus, Minus, Trash2, CreditCard, Package, History, X, Edit2, Printer } from 'lucide-react';
+import PrintLogo from '../components/PrintLogo';
 
 const POS = () => {
   const { t } = useTranslation();
@@ -62,21 +63,17 @@ const POS = () => {
   const addToCart = (product) => {
     const existing = cart.find(item => item.id === product.id);
     if (existing) {
-      if (!viewingInvoiceId && existing.quantity >= product.quantity) return; // limit to stock only when not editing (when editing, stock calculation is complex on frontend, backend will reject if insufficient)
       setCart(cart.map(item => item.id === product.id ? { ...item, quantity: parseInt(item.quantity, 10) + 1 } : item));
     } else {
-      if (!viewingInvoiceId && product.quantity <= 0) return;
       setCart([...cart, { ...product, quantity: 1 }]);
     }
   };
 
   const updateQuantity = (id, delta) => {
-    const product = products?.find(p => p.id === id);
     setCart(cart.map(item => {
       if (item.id === id) {
         const newQ = parseInt(item.quantity, 10) + delta;
         if (newQ > 0) {
-          if (!viewingInvoiceId && product && newQ > product.quantity) return { ...item, quantity: product.quantity };
           return { ...item, quantity: newQ };
         }
         return null;
@@ -87,9 +84,6 @@ const POS = () => {
 
   const updateQuantityDirect = (id, newQ) => {
     if (isNaN(newQ) || newQ < 1) newQ = 1;
-    const product = products?.find(p => p.id === id);
-    if (!viewingInvoiceId && product && newQ > product.quantity) newQ = product.quantity;
-    
     setCart(cart.map(item => item.id === id ? { ...item, quantity: newQ } : item));
   };
 
@@ -124,6 +118,17 @@ const POS = () => {
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     
+    if (!viewingInvoiceId) {
+      const hasNegativeStock = cart.some(item => {
+        const product = products?.find(p => p.id === item.id);
+        return product && (Number(product.quantity) - Number(item.quantity) < 0);
+      });
+      if (hasNegativeStock) {
+        alert(t('pos.negative_stock_error', 'Cannot complete transaction: Some items exceed available stock.'));
+        return;
+      }
+    }
+
     if (viewingInvoiceId) {
       // Edit existing invoice
       try {
@@ -339,23 +344,22 @@ const POS = () => {
     <>
       {/* Invisible Print Template */}
       {lastInvoice && (
-        <div className="hidden print:block p-8 font-mono text-black" dir={document.documentElement.dir}>
-          <div className="text-center mb-6 border-b-2 border-black pb-4">
-            <h1 className="text-3xl font-bold mb-2">{t('invoice.title')}</h1>
-            <p className="text-sm">{t('invoice.company')}</p>
-            <p className="text-sm">{t('invoice.location')}</p>
+        <div className="hidden print:block p-2 font-mono text-black w-[80mm] mx-auto text-sm" dir={document.documentElement.dir}>
+          <div className="text-center mb-4 border-b-2 border-black pb-3">
+            <PrintLogo />
+            <h1 className="text-xl font-bold mt-2 mb-1">{t('invoice.title')}</h1>
           </div>
-          <div className="mb-6 flex justify-between">
-            <div>
+          <div className="mb-4 flex flex-col gap-1 text-xs">
+            <div className="flex justify-between">
               <p><strong>{t('invoice.invoice_no')}</strong> {lastInvoice.invoice_number}</p>
-              <p><strong>{t('invoice.date')}</strong> {lastInvoice.date}</p>
+              <p>{lastInvoice.date}</p>
             </div>
-            <div className="text-right">
+            <div className="flex justify-between">
               <p><strong>{t('invoice.target')}</strong> {lastInvoice.customer_type}</p>
-              <p><strong>{t('invoice.client')}</strong> {lastInvoice.customer_name}</p>
+              <p>{lastInvoice.customer_name}</p>
             </div>
           </div>
-          <table className="w-full text-start border-collapse mb-6">
+          <table className="w-full text-start border-collapse mb-4 text-xs">
             <thead>
               <tr className="border-b border-black">
                 <th className="py-2 text-start">{t('invoice.item_desc')}</th>
@@ -375,14 +379,14 @@ const POS = () => {
               ))}
             </tbody>
           </table>
-          <div className="text-end pt-2 space-y-1">
+          <div className="text-end pt-2 space-y-1 text-xs">
             <p className="text-gray-600">{t('invoice.subtotal')} {t('common.currency')} {parseFloat(lastInvoice.subtotal).toLocaleString()}</p>
             <p className="text-gray-600">{t('invoice.discount')} {t('common.currency')} {parseFloat(lastInvoice.discount).toLocaleString()}</p>
           </div>
-          <div className="text-end border-t-2 border-black pt-4 mt-4">
-            <h2 className="text-xl font-bold">{t('invoice.grand_total')} {t('common.currency')} {parseFloat(lastInvoice.total).toLocaleString()}</h2>
+          <div className="text-end border-t border-black pt-2 mt-2">
+            <h2 className="text-base font-bold">{t('invoice.grand_total')} {t('common.currency')} {parseFloat(lastInvoice.total).toLocaleString()}</h2>
           </div>
-          <div className="mt-12 text-center text-xs text-gray-500">
+          <div className="mt-6 text-center text-[10px] text-gray-500">
             <p>{t('invoice.thank_you')}</p>
           </div>
         </div>
@@ -577,11 +581,17 @@ const POS = () => {
           ) : (
             cart.map(item => {
               const price = Number(item.selling_price) || Number(item.cost_price);
+              const product = products?.find(p => p.id === item.id);
+              const remainingStock = product ? (Number(product.quantity) - Number(item.quantity)) : 0;
+              
               return (
                 <div key={item.id} className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex justify-between group">
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-white text-sm truncate pr-2">{item.name}</h4>
-                    <p className="text-xs text-muted mb-2">{t('common.currency')} {price.toLocaleString()} / {item.unit}</p>
+                    <p className="text-xs text-muted mb-1">{t('common.currency')} {price.toLocaleString()} / {item.unit}</p>
+                    <p className={`text-[10px] mb-3 font-semibold ${remainingStock > 0 ? 'text-emerald-400' : remainingStock === 0 ? 'text-warning' : 'text-danger'}`}>
+                      {remainingStock > 0 ? `Stock: ${remainingStock}` : remainingStock === 0 ? 'Last item!' : `Stock: ${remainingStock}`}
+                    </p>
                     
                     <div className="flex items-center gap-3">
                       <button onClick={() => updateQuantity(item.id, -1)} className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-white transition-colors">

@@ -17,8 +17,8 @@ class InsuranceController {
                    a.code as apartment_code, b.name as building_name,
                    t.full_name as tenant_name, a.monthly_insurance as base_insurance,
                    c.monthly_insurance,
-                   (SELECT SUM(amount) FROM insurance_transactions it 
-                    WHERE it.account_id = ia.id AND it.type = 'Deposit' AND MONTH(it.date) = ? AND YEAR(it.date) = ?) as collected_this_month
+                   COALESCE((SELECT SUM(amount) FROM insurance_transactions it 
+                    WHERE it.account_id = ia.id AND it.type = 'Deposit' AND MONTH(it.date) = ? AND YEAR(it.date) = ?), 0) as collected_this_month
             FROM insurance_accounts ia
             JOIN contracts c ON ia.contract_id = c.id
             JOIN apartments a ON c.apartment_id = a.id
@@ -32,7 +32,6 @@ class InsuranceController {
     public function show($id) {
         AuthMiddleware::requireLogin();
         
-        // id is account_id
         $stmt = $this->db->prepare("SELECT * FROM insurance_transactions WHERE account_id = ? ORDER BY date DESC");
         $stmt->execute([$id]);
         $transactions = $stmt->fetchAll();
@@ -62,12 +61,12 @@ class InsuranceController {
                 $stmt->execute([$transaction_id, $data['damage_reason']]);
             }
 
-            // Update total saved
+            // Update total saved balance
             $multiplier = ($data['type'] === 'Deposit') ? 1 : -1;
             $stmt = $this->db->prepare("UPDATE insurance_accounts SET total_saved = total_saved + (?) WHERE id = ?");
             $stmt->execute([$data['amount'] * $multiplier, $data['account_id']]);
 
-            // If Apply_To_Rent, we should create a rent_payment
+            // If Apply_To_Rent, create a rent payment entry
             if ($data['type'] === 'Apply_To_Rent' && !empty($data['invoice_id'])) {
                 $stmt = $this->db->prepare("INSERT INTO rent_payments (invoice_id, amount, date, user_id, notes) VALUES (?, ?, CURRENT_DATE(), ?, ?)");
                 $stmt->execute([$data['invoice_id'], $data['amount'], $user['user_id'], 'Applied from Insurance']);
@@ -157,7 +156,6 @@ class InsuranceController {
         try {
             $this->db->beginTransaction();
 
-            // Find the contract and apartment tied to this insurance account
             $stmt = $this->db->prepare("SELECT contract_id FROM insurance_accounts WHERE id = ?");
             $stmt->execute([$id]);
             $account = $stmt->fetch();
@@ -170,17 +168,14 @@ class InsuranceController {
             $stmt->execute([$account['contract_id']]);
             $contract = $stmt->fetch();
 
-            // Update apartment base deposit
             if ($contract && $contract['apartment_id']) {
                 $updApt = $this->db->prepare("UPDATE apartments SET monthly_insurance = ? WHERE id = ?");
                 $updApt->execute([$data['amount'], $contract['apartment_id']]);
             }
 
-            // Update contract deposit (for this and future)
             $updContract = $this->db->prepare("UPDATE contracts SET monthly_insurance = ? WHERE id = ?");
             $updContract->execute([$data['amount'], $account['contract_id']]);
 
-            // Recalculate contract insurance status
             $stmtCheck = $this->db->prepare("
                 SELECT ia.total_saved, c.monthly_insurance, c.id as contract_id 
                 FROM insurance_accounts ia
@@ -206,7 +201,6 @@ class InsuranceController {
     public function getByTenant($tenantId) {
         AuthMiddleware::requireLogin();
         
-        // Get all insurance accounts linked to this tenant's contracts
         $stmt = $this->db->prepare("
             SELECT ia.*, 
                    c.id as contract_id, c.start_date, c.end_date, c.status as contract_status,
@@ -222,7 +216,6 @@ class InsuranceController {
         $stmt->execute([$tenantId]);
         $accounts = $stmt->fetchAll();
 
-        // For each account, get its transactions
         foreach ($accounts as &$account) {
             $tStmt = $this->db->prepare("
                 SELECT it.*, u.name as created_by

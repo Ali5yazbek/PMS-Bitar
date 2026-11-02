@@ -78,7 +78,7 @@ const ApartmentInvoicesModal = ({ apartment, onClose, onPaymentSuccess }) => {
   };
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
+    return 'CFA ' + new Intl.NumberFormat('en-US').format(amount || 0);
   };
 
   const formatDate = (dateString) => {

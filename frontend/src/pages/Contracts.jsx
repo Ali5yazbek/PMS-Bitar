@@ -4,17 +4,23 @@ import api from '../api/axios';
 import { useTranslation } from 'react-i18next';
 import { FileText, Plus, Check, X, FileCheck2, Eye, Download, Building, Home, Users, DollarSign, Activity, Calendar, AlertCircle, RefreshCw, Pause, StopCircle, Play, Edit } from 'lucide-react';
 import { differenceInDays } from 'date-fns';
+import InteractiveCurrency from '../components/common/InteractiveCurrency';
 
 const Contracts = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [closeRentConfirm, setCloseRentConfirm] = useState(false);
   const [formData, setFormData] = useState({
     building_id: '',
     apartment_id: '',
     tenant_id: '',
     start_date: '',
     end_date: '',
+    rent_start_date: '',
+    rent_end_date: '',
     monthly_rent: '',
     monthly_insurance: '',
     payment_terms: '',
@@ -23,8 +29,9 @@ const Contracts = () => {
   const [rentManageModal, setRentManageModal] = useState(null);
   const [updateContractModal, setUpdateContractModal] = useState(null);
   const [updateFormData, setUpdateFormData] = useState({
-    monthly_rent: '', monthly_insurance: '', start_date: '', end_date: '', payment_terms: '', payment_method_rule: 'Any Method'
+    monthly_rent: '', monthly_insurance: '', start_date: '', end_date: '', rent_start_date: '', rent_end_date: '', payment_terms: '', payment_method_rule: 'Any Method'
   });
+  const [selectedFile, setSelectedFile] = useState(null);
 
   const { data: contracts, isLoading } = useQuery({ 
     queryKey: ['contracts'], 
@@ -43,7 +50,7 @@ const Contracts = () => {
       setShowAdd(false);
       setFormData({
         building_id: '', apartment_id: '', tenant_id: '',
-        start_date: '', end_date: '', monthly_rent: '', monthly_insurance: '', payment_terms: '', payment_method_rule: 'Any Method'
+        start_date: '', end_date: '', rent_start_date: '', rent_end_date: '', monthly_rent: '', monthly_insurance: '', payment_terms: '', payment_method_rule: 'Any Method'
       });
     }
   });
@@ -62,7 +69,10 @@ const Contracts = () => {
     mutationFn: ({ id, action }) => api.put(`/contracts/${id}/${action}`),
     onSuccess: () => {
       queryClient.invalidateQueries(['contracts']);
+      queryClient.invalidateQueries(['tenantRentProfile']);
+      queryClient.invalidateQueries(['tenant']);
       setRentManageModal(null);
+      setCloseRentConfirm(false);
       alert('Rent status updated successfully!');
     }
   });
@@ -71,6 +81,9 @@ const Contracts = () => {
     mutationFn: ({ id, data }) => api.put(`/contracts/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries(['contracts']);
+      queryClient.invalidateQueries(['tenantContracts']);
+      queryClient.invalidateQueries(['tenant']);
+      queryClient.invalidateQueries(['apartments']);
       setUpdateContractModal(null);
       alert('Contract updated successfully!');
     }
@@ -80,8 +93,26 @@ const Contracts = () => {
     mutationFn: (id) => api.post(`/contracts/${id}/renew-rent-manually`),
     onSuccess: () => {
       queryClient.invalidateQueries(['contracts']);
+      queryClient.invalidateQueries(['expiringItems']);
       setRentManageModal(null);
       alert('Rent manually renewed successfully!');
+    }
+  });
+
+  const uploadFileMutation = useMutation({
+    mutationFn: async ({ id, file }) => {
+      const formData = new FormData();
+      formData.append('contract_file', file);
+      return api.post(`/contracts/${id}/upload-file`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['contracts']);
+      queryClient.invalidateQueries(['tenantContracts']);
+      queryClient.invalidateQueries(['tenant']);
+      setSelectedFile(null);
+      alert('Contract file uploaded successfully!');
     }
   });
 
@@ -103,14 +134,15 @@ const Contracts = () => {
     printWindow.document.write(`
       <html>
         <head>
-          <title>Rental Contract - ${contract.building_name} Apt CFA ${contract.apartment_code}</title>
+          <title>Rental Contract - ${contract.building_name} Apt ${contract.apartment_code}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 40px; color: #333; line-height: 1.6; }
-            h1 { text-align: center; color: #1e3a8a; }
-            .section { margin-bottom: 20px; }
-            .label { font-weight: bold; width: 200px; display: inline-block; }
+            h1 { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; }
+            h2 { color: #4f46e5; margin-top: 30px; }
+            .section { margin-bottom: 25px; }
+            .label { font-weight: bold; width: 150px; display: inline-block; }
             .footer { margin-top: 50px; display: flex; justify-content: space-between; }
-            .signature-box { border-top: 1px solid #000; width: 200px; padding-top: 10px; text-align: center; }
+            .signature-box { border-top: 1px solid #333; width: 250px; text-align: center; padding-top: 10px; margin-top: 60px; }
           </style>
         </head>
         <body>
@@ -118,24 +150,24 @@ const Contracts = () => {
           <hr />
           <div class="section">
             <h2>Property Details</h2>
-            <div><span class="label">Building:</span> CFA ${contract.building_name}</div>
-            <div><span class="label">Apartment Number:</span> CFA ${contract.apartment_code}</div>
+            <div><span class="label">Building:</span> ${contract.building_name}</div>
+            <div><span class="label">Apartment Number:</span> ${contract.apartment_code}</div>
           </div>
           <div class="section">
             <h2>Tenant Details</h2>
-            <div><span class="label">Full Name:</span> CFA ${contract.tenant_name}</div>
-            <div><span class="label">Phone:</span> CFA ${contract.phone || 'N/A'}</div>
+            <div><span class="label">Full Name:</span> ${contract.tenant_name}</div>
+            <div><span class="label">Phone:</span> ${contract.phone || 'N/A'}</div>
           </div>
           <div class="section">
             <h2>Contract Terms</h2>
-            <div><span class="label">Start Date:</span> CFA ${contract.start_date}</div>
-            <div><span class="label">End Date:</span> CFA ${contract.end_date}</div>
+            <div><span class="label">Start Date:</span> ${contract.start_date}</div>
+            <div><span class="label">End Date:</span> ${contract.end_date}</div>
             <div><span class="label">Monthly Rent:</span> CFA ${contract.monthly_rent}</div>
             <div><span class="label">Security Deposit:</span> CFA ${contract.monthly_insurance}</div>
           </div>
           <div class="section">
             <h2>Payment Terms</h2>
-            <p>CFA ${contract.payment_terms || 'Standard payment terms apply.'}</p>
+            <p>${contract.payment_terms || 'Standard payment terms apply.'}</p>
           </div>
           <div class="footer">
             <div class="signature-box">Landlord Signature</div>
@@ -166,6 +198,19 @@ const Contracts = () => {
   };
 
   const vacantApartments = allApartments?.filter(a => a.status === 'Vacant' && (!formData.building_id || a.building_id == formData.building_id));
+
+  const filteredContracts = contracts?.filter(c => {
+    const matchesSearch = searchTerm === '' || 
+      c.tenant_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.building_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.apartment_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.status?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(c.monthly_rent).includes(searchTerm);
+      
+    const matchesStatus = statusFilter === 'All' || c.status === statusFilter;
+    
+    return matchesSearch && matchesStatus;
+  });
 
   return (
     <div className="space-y-6">
@@ -226,6 +271,15 @@ const Contracts = () => {
               </div>
 
               <div>
+                <label className="block text-sm font-medium text-muted mb-1">Rent Start Date</label>
+                <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={formData.rent_start_date} onChange={e => setFormData({...formData, rent_start_date: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-muted mb-1">Rent End Date</label>
+                <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={formData.rent_end_date} onChange={e => setFormData({...formData, rent_end_date: e.target.value})} />
+              </div>
+
+              <div>
                 <label className="block text-sm font-medium text-muted mb-1">Monthly Rent Amount</label>
                 <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={formData.monthly_rent} onChange={e => setFormData({...formData, monthly_rent: e.target.value})} />
               </div>
@@ -258,6 +312,36 @@ const Contracts = () => {
         )}
 
         <div className="glass-card overflow-hidden">
+          <div className="p-4 border-b border-slate-700/50 bg-slate-800/30 flex flex-col md:flex-row gap-4 items-center justify-between">
+            <div className="relative w-full md:w-96">
+              <input 
+                type="text" 
+                placeholder="Search by tenant, building, apt, rent, status..." 
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2 text-white outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all"
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+              <svg className="absolute left-3 top-2.5 text-slate-400" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            </div>
+            <div className="w-full md:w-auto">
+              <select 
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-white outline-none focus:border-primary transition-all"
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+              >
+                <option value="All">All Statuses</option>
+                <option value="Draft">Draft</option>
+                <option value="Pending_Signature">Pending Signature</option>
+                <option value="Signed">Signed</option>
+                <option value="Approved">Approved</option>
+                <option value="Active">Active</option>
+                <option value="Expired">Expired</option>
+                <option value="Renewal_Pending">Renewal Pending</option>
+                <option value="Terminated">Terminated</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+            </div>
+          </div>
           <table className="min-w-full divide-y divide-slate-700/50 text-start">
             <thead>
               <tr className="bg-slate-800/30">
@@ -270,7 +354,7 @@ const Contracts = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/50">
-              {contracts?.map(contract => (
+              {filteredContracts?.map(contract => (
                 <tr key={contract.id} className="hover:bg-slate-800/30 transition-colors">
                   <td className="px-6 py-4">
                     <div className="font-medium text-white">{contract.building_name}</div>
@@ -294,9 +378,9 @@ const Contracts = () => {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-slate-300">
-                    <div className="font-medium text-white mb-1">CFA {contract.monthly_rent}</div>
+                    <div className="font-medium text-white mb-1"><InteractiveCurrency amountCFA={contract.monthly_rent} /></div>
                     <div className="text-slate-400 text-xs flex items-center justify-between">
-                      <span>Ins: CFA {contract.monthly_insurance}</span>
+                      <span>Ins: <InteractiveCurrency amountCFA={contract.monthly_insurance} /></span>
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${contract.insurance_status === 'Paid' ? 'bg-green-500/20 text-green-400' : 'bg-orange-500/20 text-orange-400'}`}>
                         {contract.insurance_status || 'Pending Payment'}
                       </span>
@@ -305,10 +389,11 @@ const Contracts = () => {
                   <td className="px-6 py-4">
                     <div className="flex flex-col gap-1 items-start">
                       {getStatusBadge(contract.status)}
-                      {contract.status === 'Active' && (
+                      {contract.rent_status && (
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          contract.rent_status === 'Active' ? 'bg-blue-500/20 text-blue-400' :
+                          contract.rent_status === 'Active' ? 'bg-emerald-500/20 text-emerald-400' :
                           contract.rent_status === 'Paused' ? 'bg-yellow-500/20 text-yellow-400' :
+                          contract.rent_status === 'Closed' ? 'bg-red-500/20 text-red-400' :
                           'bg-slate-500/20 text-slate-400'
                         }`}>
                           Rent: {contract.rent_status}
@@ -319,8 +404,8 @@ const Contracts = () => {
                   <td className="px-6 py-4 text-end text-sm">
                     <div className="flex justify-end gap-2">
                       {contract.status === 'Active' && (
-                        <button onClick={() => setRentManageModal(contract)} className="text-blue-400 hover:text-blue-300 p-2 transition-colors rounded-lg hover:bg-slate-800" title="Manage Rent">
-                          <DollarSign size={18} />
+                        <button onClick={() => setRentManageModal(contract)} className="text-blue-400 hover:text-blue-300 p-2 transition-colors rounded-lg hover:bg-slate-800" title="Manage Status">
+                          <Activity size={18} />
                         </button>
                       )}
                       <button onClick={() => generatePDF(contract)} className="text-indigo-400 hover:text-indigo-300 p-2 transition-colors rounded-lg hover:bg-slate-800" title="Download PDF">
@@ -333,6 +418,8 @@ const Contracts = () => {
                           monthly_insurance: contract.monthly_insurance,
                           start_date: contract.start_date,
                           end_date: contract.end_date,
+                          rent_start_date: contract.rent_start_date || '',
+                          rent_end_date: contract.rent_end_date || '',
                           payment_terms: contract.payment_terms || ''
                         });
                       }} className="text-emerald-400 hover:text-emerald-300 p-2 transition-colors rounded-lg hover:bg-slate-800" title="Update Contract">
@@ -361,7 +448,7 @@ const Contracts = () => {
               ))}
             </tbody>
           </table>
-          {contracts?.length === 0 && <div className="p-8 text-center text-muted">No contracts found.</div>}
+          {filteredContracts?.length === 0 && <div className="p-8 text-center text-muted">No contracts found.</div>}
         </div>
 
         {/* Rent Management Modal */}
@@ -370,54 +457,179 @@ const Contracts = () => {
             <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
               <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-800/30">
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <DollarSign className="text-blue-400" size={24} /> 
+                  <Building className="text-blue-400" size={24} /> 
                   Rent Management
                 </h3>
-                <button onClick={() => setRentManageModal(null)} className="text-slate-400 hover:text-white transition-colors">
+                <button onClick={() => { setRentManageModal(null); setCloseRentConfirm(false); }} className="text-slate-400 hover:text-white transition-colors">
                   <X size={24} />
                 </button>
               </div>
-              <div className="p-6 space-y-6">
-                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
-                  <p className="text-sm text-slate-400 mb-1">Current Rent Status</p>
-                  <p className="text-lg font-bold text-white">{rentManageModal.rent_status}</p>
+              <div className="p-6 space-y-4">
+                {/* Current status summary */}
+                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-400 mb-1">Rent Status</p>
+                    <p className={`text-lg font-bold ${
+                      rentManageModal.rent_status === 'Active' ? 'text-emerald-400' :
+                      rentManageModal.rent_status === 'Paused' ? 'text-yellow-400' :
+                      rentManageModal.rent_status === 'Closed' ? 'text-red-400' : 'text-white'
+                    }`}>{rentManageModal.rent_status || 'Active'}</p>
+                  </div>
+                  <div className={`w-3 h-3 rounded-full ${
+                    rentManageModal.rent_status === 'Active' ? 'bg-emerald-400' :
+                    rentManageModal.rent_status === 'Paused' ? 'bg-yellow-400' : 'bg-red-400'
+                  }`} />
                 </div>
-                
-                <div className="flex flex-col gap-3">
-                  {rentManageModal.rent_status === 'Active' && (
-                    <button onClick={() => rentActionMutation.mutate({ id: rentManageModal.id, action: 'pause-rent' })} className="flex items-center justify-between w-full bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 border border-yellow-500/30 px-4 py-3 rounded-xl transition-colors text-left">
-                      <div>
-                        <p className="font-bold">Pause Rent Generation</p>
-                        <p className="text-xs opacity-80">Stop generating new invoices temporarily</p>
-                      </div>
-                      <Pause size={20} />
-                    </button>
-                  )}
-                  {rentManageModal.rent_status === 'Paused' && (
-                    <button onClick={() => rentActionMutation.mutate({ id: rentManageModal.id, action: 'resume-rent' })} className="flex items-center justify-between w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 px-4 py-3 rounded-xl transition-colors text-left">
-                      <div>
-                        <p className="font-bold">Resume Rent Generation</p>
-                        <p className="text-xs opacity-80">Continue generating invoices normally</p>
-                      </div>
-                      <Play size={20} />
-                    </button>
-                  )}
-                  {rentManageModal.rent_status !== 'Ended' && (
-                    <button onClick={() => { if(window.confirm('Are you sure? Rent generation will permanently stop for this contract.')) rentActionMutation.mutate({ id: rentManageModal.id, action: 'end-rent' }) }} className="flex items-center justify-between w-full bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 px-4 py-3 rounded-xl transition-colors text-left">
-                      <div>
-                        <p className="font-bold">End Rent Cycle</p>
-                        <p className="text-xs opacity-80">Permanently stop rent for this contract</p>
-                      </div>
-                      <StopCircle size={20} />
-                    </button>
-                  )}
-                  <button onClick={() => renewRentMutation.mutate(rentManageModal.id)} className="flex items-center justify-between w-full bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 px-4 py-3 rounded-xl transition-colors text-left">
-                    <div>
-                      <p className="font-bold">Manually Renew Rent Now</p>
-                      <p className="text-xs text-slate-400">Generate the next invoice immediately</p>
+
+                {/* Close Rent Confirmation Dialog */}
+                {closeRentConfirm ? (
+                  <div className="bg-red-900/20 border border-red-500/40 rounded-xl p-5 space-y-3">
+                    <p className="font-bold text-red-400 text-lg">Close Rent?</p>
+                    <p className="text-sm text-slate-300">This will stop future rent invoices from being generated.</p>
+                    <ul className="text-xs text-slate-400 space-y-1 list-disc ml-4">
+                      <li>Existing invoices will remain.</li>
+                      <li>Payment history is preserved.</li>
+                      <li>The rent profile is kept for auditing.</li>
+                    </ul>
+                    <div className="flex gap-3 pt-2">
+                      <button onClick={() => setCloseRentConfirm(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg text-sm font-medium transition-colors">Cancel</button>
+                      <button 
+                        onClick={() => rentActionMutation.mutate({ id: rentManageModal.id, action: 'close-rent' })}
+                        disabled={rentActionMutation.isLoading}
+                        className="flex-1 bg-red-600 hover:bg-red-500 text-white py-2 rounded-lg text-sm font-bold transition-colors"
+                      >Close Rent</button>
                     </div>
-                    <RefreshCw size={20} className="text-slate-400" />
-                  </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {/* Pause - only shown if Active */}
+                    {rentManageModal.rent_status === 'Active' && (
+                      <button onClick={() => rentActionMutation.mutate({ id: rentManageModal.id, action: 'pause-rent' })} className="flex items-center justify-between w-full bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 border border-yellow-500/30 px-4 py-3 rounded-xl transition-colors text-left">
+                        <div>
+                          <p className="font-bold">Pause Billing</p>
+                          <p className="text-xs opacity-80">Stop generating new invoices temporarily</p>
+                        </div>
+                        <Pause size={20} />
+                      </button>
+                    )}
+
+                    {/* Resume - only shown if Paused */}
+                    {rentManageModal.rent_status === 'Paused' && (
+                      <button onClick={() => rentActionMutation.mutate({ id: rentManageModal.id, action: 'resume-rent' })} className="flex items-center justify-between w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 px-4 py-3 rounded-xl transition-colors text-left">
+                        <div>
+                          <p className="font-bold">Resume Billing</p>
+                          <p className="text-xs opacity-80">Continue generating invoices normally</p>
+                        </div>
+                        <Play size={20} />
+                      </button>
+                    )}
+
+                    {/* Manual generate next invoice */}
+                    {(rentManageModal.rent_status === 'Active' || rentManageModal.rent_status === 'Paused') && (
+                      <button onClick={() => renewRentMutation.mutate(rentManageModal.id)} className="flex items-center justify-between w-full bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 px-4 py-3 rounded-xl transition-colors text-left">
+                        <div>
+                          <p className="font-bold">Generate Next Invoice Now</p>
+                          <p className="text-xs text-slate-400">Manually generate the next invoice immediately</p>
+                        </div>
+                        <RefreshCw size={20} className="text-slate-400" />
+                      </button>
+                    )}
+
+                    {/* Close Rent - always shown if not already Closed */}
+                    {rentManageModal.rent_status !== 'Closed' && (
+                      <button onClick={() => setCloseRentConfirm(true)} className="flex items-center justify-between w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 px-4 py-3 rounded-xl transition-colors text-left">
+                        <div>
+                          <p className="font-bold">Close Rent</p>
+                          <p className="text-xs opacity-80">Permanently stop future invoices</p>
+                        </div>
+                        <StopCircle size={20} />
+                      </button>
+                    )}
+
+                    {/* Already Closed info */}
+                    {rentManageModal.rent_status === 'Closed' && (
+                      <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 text-center">
+                        <p className="text-slate-400 text-sm">This rent is closed. No further invoices will be generated.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Update Contract Modal */}
+        {updateContractModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl">
+              <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-800/30">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Edit className="text-emerald-400" size={24} /> 
+                  Update Contract
+                </h3>
+                <button onClick={() => setUpdateContractModal(null)} className="text-slate-400 hover:text-white transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Contract Start Date</label>
+                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.start_date} onChange={e => setUpdateFormData({...updateFormData, start_date: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Contract End Date</label>
+                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.end_date} onChange={e => setUpdateFormData({...updateFormData, end_date: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Rent Start Date</label>
+                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.rent_start_date} onChange={e => setUpdateFormData({...updateFormData, rent_start_date: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Rent End Date</label>
+                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.rent_end_date} onChange={e => setUpdateFormData({...updateFormData, rent_end_date: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Monthly Rent Amount</label>
+                    <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.monthly_rent} onChange={e => setUpdateFormData({...updateFormData, monthly_rent: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Insurance Deposit Amount</label>
+                    <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.monthly_insurance} onChange={e => setUpdateFormData({...updateFormData, monthly_insurance: e.target.value})} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-muted mb-1">Payment Method Rule</label>
+                    <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.payment_method_rule} onChange={e => setUpdateFormData({...updateFormData, payment_method_rule: e.target.value})}>
+                      <option value="Any Method">Any Method (Follow Tenant Default)</option>
+                      <option value="Bank Transfer Only">Bank Transfer Only</option>
+                      <option value="Cash Only">Cash Only</option>
+                      <option value="Mobile Money Only">Mobile Money Only</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-muted mb-1">Payment Terms</label>
+                    <textarea rows="3" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" value={updateFormData.payment_terms} onChange={e => setUpdateFormData({...updateFormData, payment_terms: e.target.value})} placeholder="E.g., Payment due on the 1st of every month..." />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-muted mb-1">Contract Document</label>
+                    <div className="flex gap-2 items-center">
+                      <input type="file" className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-primary" onChange={e => setSelectedFile(e.target.files[0])} />
+                      <button onClick={() => selectedFile && uploadFileMutation.mutate({ id: updateContractModal.id, file: selectedFile })} disabled={!selectedFile || uploadFileMutation.isLoading} className="bg-primary hover:bg-indigo-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+                        {uploadFileMutation.isLoading ? 'Uploading...' : 'Upload'}
+                      </button>
+                    </div>
+                    {updateContractModal.contract_file && (
+                      <p className="mt-2 text-sm text-emerald-400 flex items-center gap-1">
+                        <Check size={16} /> Document uploaded: 
+                        <a href={`${process.env.REACT_APP_API_URL.replace('/api', '')}/${updateContractModal.contract_file}`} target="_blank" rel="noreferrer" className="underline hover:text-emerald-300">View File</a>
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-700/50 mt-4">
+                  <button onClick={() => setUpdateContractModal(null)} className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 rounded-lg transition-colors">Cancel</button>
+                  <button onClick={() => updateMutation.mutate({ id: updateContractModal.id, data: updateFormData })} className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2 rounded-lg transition-colors">Save Changes</button>
                 </div>
               </div>
             </div>
@@ -428,3 +640,4 @@ const Contracts = () => {
 };
 
 export default Contracts;
+

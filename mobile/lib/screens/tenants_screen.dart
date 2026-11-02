@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:go_router/go_router.dart';
 import '../config/app_theme.dart';
 import '../services/api_service.dart';
 
@@ -12,7 +13,8 @@ final tenantsProvider = FutureProvider<List<dynamic>>((ref) async {
 });
 
 class TenantsScreen extends ConsumerStatefulWidget {
-  const TenantsScreen({super.key});
+  final String? buildingId;
+  const TenantsScreen({super.key, this.buildingId});
   @override
   ConsumerState<TenantsScreen> createState() => _TenantsScreenState();
 }
@@ -80,6 +82,11 @@ class _TenantsScreenState extends ConsumerState<TenantsScreen> {
                 data: (tenants) {
                   final filtered = tenants.where((t) {
                     final m = t as Map<String, dynamic>;
+                    
+                    if (widget.buildingId != null && m['building_id']?.toString() != widget.buildingId) {
+                      return false;
+                    }
+                    
                     return _search.isEmpty ||
                         (m['full_name'] ?? '').toString().toLowerCase().contains(_search) ||
                         (m['phone'] ?? '').toString().contains(_search);
@@ -150,7 +157,7 @@ class _TenantCardState extends State<_TenantCard> {
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
-            onTap: () {}, // Future: View tenant details
+            onTap: () => context.push('/tenants/${widget.tenant['id']}'),
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Row(

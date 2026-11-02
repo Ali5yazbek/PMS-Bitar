@@ -3,7 +3,8 @@ import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../api/axios';
-import { ArrowLeft, Zap, DollarSign, Activity } from 'lucide-react';
+import { ArrowLeft, Zap, DollarSign, Activity, FileText } from 'lucide-react';
+import ApartmentBillingModal from '../components/ApartmentBillingModal';
 
 const BuildingSubscriptions = () => {
   const { t } = useTranslation();
@@ -11,19 +12,25 @@ const BuildingSubscriptions = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedApt, setSelectedApt] = useState(null);
-  const [activeTab, setActiveTab] = useState('monthly'); // 'monthly' or 'metered'
-  const [filterTab, setFilterTab] = useState('all'); // 'all', 'fixed', 'metered'
+  const [activeTab, setActiveTab] = useState('fixed_monthly'); // 'fixed_monthly', 'fixed_amp', or 'meter'
+  const [filterTab, setFilterTab] = useState('all'); // 'all', 'fixed', or 'metered'
   const [searchTerm, setSearchTerm] = useState('');
   const [expirySoon, setExpirySoon] = useState(false);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [invoiceModalApt, setInvoiceModalApt] = useState(null);
   const [renewModalApt, setRenewModalApt] = useState(null);
+  const [manageBillingApt, setManageBillingApt] = useState(null);
   const [toast, setToast] = useState(null); // { message, type }
+  const [payInvoiceModal, setPayInvoiceModal] = useState(null); // { invoice }
+  const [payInvoiceAmount, setPayInvoiceAmount] = useState('');
+  const [payInvoiceMethod, setPayInvoiceMethod] = useState('Cash');
 
-  const [monthlyForm, setMonthlyForm] = useState({
-    amps: '', cost_per_amp: '', start_date: new Date().toISOString().split('T')[0], end_date: ''
+  const [subForm, setSubForm] = useState({
+    type: 'Fixed Monthly', monthly_fee: '', amps: '', cost_per_amp: '',
+    last_meter_reading: '', current_reading: '', price_per_kwh: ''
   });
+
   const [meterForm, setMeterForm] = useState({
     previous_reading: 0, current_reading: '', price_per_kwh: '', start_date: new Date().toISOString().split('T')[0], end_date: ''
   });
@@ -51,17 +58,41 @@ const BuildingSubscriptions = () => {
 
   const monthlyMutation = useMutation({
     mutationFn: (data) => api.post(`/energy/apartments/${selectedApt}/subscriptions`, data),
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries(['buildingSubscriptions', id]);
+      const d = res.data;
+      if (d?.start_date && d?.end_date) {
+        setToast({ message: `✅ Subscription saved! Period: ${d.start_date} → ${d.end_date}`, type: 'success' });
+        setTimeout(() => setToast(null), 5000);
+      }
       setSelectedApt(null);
+    },
+    onError: (err) => {
+      setToast({ message: err?.response?.data?.error || 'Failed to save subscription', type: 'error' });
+      setTimeout(() => setToast(null), 4000);
+    }
+  });
+
+
+  const payInvoiceMutation = useMutation({
+    mutationFn: ({ id, amount }) => api.put(`/electricity/invoices/${id}/pay`, { amount_paid: amount }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['subscriptionInvoices', invoiceModalApt]);
+      setPayInvoiceModal(null);
+      setPayInvoiceAmount('');
+      setPayInvoiceMethod('Cash');
+    },
+    onError: (error) => {
+      setToast({ message: error?.response?.data?.error || 'Payment failed', type: 'error' });
+      setTimeout(() => setToast(null), 3000);
     }
   });
 
   const meterMutation = useMutation({
-    mutationFn: (data) => api.post(`/energy/apartments/${selectedApt}/meter-readings`, data),
+    mutationFn: ({aptId, data}) => api.post(`/energy/apartments/${aptId}/meter-readings`, data),
     onSuccess: () => {
       queryClient.invalidateQueries(['buildingSubscriptions', id]);
-      setSelectedApt(null);
+      setRenewModalApt(null);
     }
   });
 
@@ -103,6 +134,143 @@ const BuildingSubscriptions = () => {
     enabled: !!invoiceModalApt
   });
 
+  const handlePrintInvoice = (inv) => {
+    const aptDetails = apartments?.find(a => a.apartment_id === invoiceModalApt);
+    const tenantName = aptDetails?.tenant_name || 'Tenant';
+    const aptCode = aptDetails?.apartment_code || '';
+    
+    const printWindow = window.open('', '', 'width=800,height=600');
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Invoice - ${tenantName}</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; padding: 40px; color: #111; max-width: 600px; margin: 0 auto; }
+            .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 30px; }
+            .header h1 { margin: 0 0 10px 0; font-size: 24px; color: #1e293b; }
+            .details { margin-bottom: 30px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px dashed #e2e8f0; padding-bottom: 8px; }
+            .row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+            .label { color: #64748b; font-weight: 500; }
+            .value { font-weight: 600; text-align: right; }
+            .amount { font-size: 20px; font-weight: bold; margin-top: 20px; text-align: center; padding: 15px; background: #f8fafc; border-radius: 8px; }
+            .paid { color: #10b981; }
+            .unpaid { color: #ef4444; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Generator Subscription Invoice</h1>
+            <p><strong>Apartment:</strong> ${aptCode} &nbsp;|&nbsp; <strong>Tenant:</strong> ${tenantName}</p>
+          </div>
+          <div class="details">
+            <div class="row"><span class="label">Period / Due Date</span> <span class="value">${inv.due_date}</span></div>
+            <div class="row"><span class="label">Plan</span> <span class="value">${inv.amps ? inv.amps + ' Amps' : 'Metered'}</span></div>
+            <div class="row"><span class="label">Total Cost</span> <span class="value">CFA ${Number(inv.amount).toLocaleString()}</span></div>
+            <div class="row"><span class="label">Amount Paid</span> <span class="value">CFA ${Number(inv.amount_paid).toLocaleString()}</span></div>
+            <div class="row"><span class="label">Remaining Balance</span> <span class="value">CFA ${((inv.amount - inv.amount_paid) > 0 ? (inv.amount - inv.amount_paid) : 0).toLocaleString()}</span></div>
+          </div>
+          <div class="amount ${(inv.amount - inv.amount_paid) > 0 ? 'unpaid' : 'paid'}">
+            Status: ${(inv.amount - inv.amount_paid) > 0 ? 'Unpaid / Partial' : 'Paid in Full'}
+          </div>
+          <script>
+            window.onload = function() { window.print(); window.close(); }
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  const handlePrintInvoiceList = () => {
+    const aptDetails = apartments?.find(a => a.apartment_id === invoiceModalApt);
+    const tenantName = aptDetails?.tenant_name || 'Tenant';
+    const aptCode = aptDetails?.apartment_code || '';
+    
+    const printWindow = window.open('', '', 'width=800,height=600');
+    
+    let tableRows = '';
+    let totalPaid = 0;
+    let totalRemain = 0;
+
+    if (subscriptionInvoices && subscriptionInvoices.length > 0) {
+      tableRows = subscriptionInvoices.map(inv => {
+        const remain = (inv.amount - inv.amount_paid) > 0 ? (inv.amount - inv.amount_paid) : 0;
+        totalPaid += Number(inv.amount_paid) || 0;
+        totalRemain += remain;
+
+        return `
+          <tr>
+            <td>${inv.due_date}</td>
+            <td>${inv.amps ? inv.amps + ' Amps' : 'Metered'}</td>
+            <td>CFA ${Number(inv.amount).toLocaleString()}</td>
+            <td class="paid">CFA ${Number(inv.amount_paid).toLocaleString()}</td>
+            <td class="unpaid">CFA ${remain.toLocaleString()}</td>
+          </tr>
+        `;
+      }).join('');
+    } else {
+      tableRows = `<tr><td colspan="5" style="text-align:center;">No invoices found.</td></tr>`;
+    }
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Invoice List - ${tenantName}</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; padding: 40px; color: #111; max-width: 800px; margin: 0 auto; }
+            .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 30px; }
+            .header h1 { margin: 0 0 10px 0; font-size: 24px; color: #1e293b; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+            th { background-color: #f8fafc; color: #475569; font-weight: 600; }
+            .paid { color: #10b981; }
+            .unpaid { color: #ef4444; font-weight: bold; }
+            .summary { float: right; width: 280px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; background: #f8fafc; margin-bottom: 40px; }
+            .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 16px; }
+            .summary-row:last-child { margin-bottom: 0; font-weight: bold; border-top: 1px solid #cbd5e1; padding-top: 8px; margin-top: 8px; font-size: 18px; }
+            .summary-label { color: #475569; font-weight: 500; }
+            .summary-value { text-align: right; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Generator Subscription Invoices</h1>
+            <p><strong>Apartment:</strong> ${aptCode} &nbsp;|&nbsp; <strong>Tenant:</strong> ${tenantName}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Period / Due Date</th>
+                <th>Plan</th>
+                <th>Cost</th>
+                <th>Paid</th>
+                <th>Remain</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRows}
+            </tbody>
+          </table>
+          <div class="summary">
+            <div class="summary-row">
+              <span class="summary-label">Total Paid:</span> 
+              <span class="summary-value paid">CFA ${totalPaid.toLocaleString()}</span>
+            </div>
+            <div class="summary-row">
+              <span class="summary-label">Total Remaining:</span> 
+              <span class="summary-value unpaid">CFA ${totalRemain.toLocaleString()}</span>
+            </div>
+          </div>
+          <script>
+            window.onload = function() { window.print(); window.close(); }
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   if (isLoading) return <div className="flex-1 p-8 flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div></div>;
 
   const filteredApartments = apartments?.filter(apt => {
@@ -130,25 +298,31 @@ const BuildingSubscriptions = () => {
     return true;
   });
 
-  const openConfig = (apt, type) => {
+  const openConfig = (apt) => {
     setSelectedApt(apt.apartment_id);
-    setActiveTab(type);
+    let type = apt.type || 'Meter';
+    if (!apt.type) {
+      if (apt.amps > 0) type = 'Fixed Amp';
+      else if (apt.monthly_fee > 0) type = 'Fixed Monthly';
+    }
     
-    setMonthlyForm({
+    let tab = 'meter';
+    if (type === 'Fixed Monthly') tab = 'fixed_monthly';
+    if (type === 'Fixed Amp') tab = 'fixed_amp';
+
+    setActiveTab(tab);
+    
+    setSubForm({
+      type: type,
       amps: apt.amps || '',
       cost_per_amp: apt.cost_per_amp || '',
-      start_date: apt.start_date || new Date().toISOString().split('T')[0],
-      end_date: apt.end_date || ''
-    });
-    
-    setMeterForm({
-      previous_reading: apt.last_reading || 0,
+      monthly_fee: apt.monthly_fee || '',
+      last_meter_reading: apt.last_meter_reading || '',
       current_reading: '',
-      price_per_kwh: stats?.generator?.price_per_kw || '',
-      start_date: apt.start_date || new Date().toISOString().split('T')[0],
-      end_date: apt.end_date || ''
+      price_per_kwh: apt.price_per_kwh || ''
     });
   };
+
 
   return (
     <div className="flex-1 overflow-y-auto p-8 hide-scrollbar bg-background">
@@ -244,12 +418,18 @@ const BuildingSubscriptions = () => {
                   <td className="py-4 font-bold text-white text-lg">{apt.apartment_code}</td>
                   <td className="py-4 text-slate-300 font-medium">{apt.tenant_name || '-'}</td>
                   <td className="py-4">
-                    {apt.amps > 0 ? (
+                    {!apt.subscription_id ? (
+                      <span className="bg-slate-800 text-slate-400 px-3 py-1 rounded-full text-sm">No Plan</span>
+                    ) : apt.type === 'Fixed Amp' ? (
                       <span className="bg-primary/20 text-indigo-300 px-3 py-1 rounded-full text-sm">
-                        {t('buildingsubscriptions.fixed', { defaultValue: `Fixed:` })} {apt.amps} {t('buildingsubscriptions.amps_cfa', { defaultValue: `Amps (CFA` })} {apt.monthly_fee})
+                        Fixed: {apt.amps} Amps (CFA {apt.monthly_fee})
+                      </span>
+                    ) : apt.type === 'Fixed Monthly' ? (
+                      <span className="bg-primary/20 text-indigo-300 px-3 py-1 rounded-full text-sm">
+                        Fixed Monthly: CFA {apt.monthly_fee}
                       </span>
                     ) : (
-                      <span className="text-muted text-sm italic">{t('buildingsubscriptions.metered_none', { defaultValue: `Metered / None` })}</span>
+                      <span className="bg-slate-700/50 text-slate-300 px-3 py-1 rounded-full text-sm">Metered</span>
                     )}
                   </td>
                   <td className="py-4 text-slate-300">{apt.start_date || '-'}</td>
@@ -272,7 +452,7 @@ const BuildingSubscriptions = () => {
                       </div>
                     ) : '-'}
                   </td>
-                  <td className="py-4 text-white font-medium">{(!apt.amps || apt.amps == 0) ? (apt.last_reading || '-') : '-'}</td>
+                  <td className="py-4 text-white font-medium">{(!apt.amps || apt.amps == 0) ? (apt.last_reading || apt.last_meter_reading || '-') : '-'}</td>
                   <td className="py-4 text-success font-medium"><DollarSign size={14} className="inline" /> {apt.paid_amount || 0}</td>
                   <td className="py-4">
                     {apt.unpaid_balance > 0 ? (
@@ -282,9 +462,12 @@ const BuildingSubscriptions = () => {
                     )}
                   </td>
                   <td className="py-4 text-right flex justify-end gap-2">
-                    <button onClick={() => openConfig(apt, apt.amps > 0 ? 'monthly' : 'metered')} className="px-3 py-1.5 bg-primary hover:bg-primary/80 text-white rounded-lg text-sm transition-colors shadow-lg shadow-primary/20">{t('buildingsubscriptions.manage_plan', { defaultValue: `Manage Plan` })}</button>
-                    <button onClick={() => setRenewModalApt(apt.apartment_id)} className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm transition-colors">Renewly</button>
-                    <button onClick={() => setInvoiceModalApt(apt.apartment_id)} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm transition-colors border border-slate-700">Invoice</button>
+                    <button 
+                      onClick={() => setManageBillingApt(apt.apartment_id)} 
+                      className="px-4 py-2 bg-primary hover:bg-indigo-600 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-primary/20 flex items-center gap-2"
+                    >
+                      <Zap size={16} /> Manage Billing
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -311,113 +494,130 @@ const BuildingSubscriptions = () => {
                     <p className="text-slate-400 text-sm">{t('buildingsubscriptions.select_billing_method', { defaultValue: 'Select billing method for this unit.' })}</p>
                   </div>
                   
-                  <div className="flex bg-slate-900 p-1 rounded-lg mb-6">
+                  <div className="relative flex bg-slate-900 p-1 rounded-lg mb-6">
                     <button 
-                      onClick={() => setActiveTab('monthly')} 
-                      className={`flex-1 py-2 text-sm font-bold rounded-md transition-colors ${activeTab === 'monthly' ? 'bg-primary text-white shadow-lg shadow-primary/20' : 'text-slate-400 hover:text-white'}`}
+                      onClick={() => { setActiveTab('fixed_monthly'); setSubForm({...subForm, type: 'Fixed Monthly'}); }} 
+                      className={`relative z-10 flex-1 py-2 text-sm font-bold transition-colors ${activeTab === 'fixed_monthly' ? 'text-white bg-primary rounded shadow' : 'text-slate-400 hover:text-white'}`}
                     >
-                      {t('buildingsubscriptions.monthly_fixed', { defaultValue: 'Monthly (Fixed Amps)' })}
+                      Fixed Monthly
                     </button>
                     <button 
-                      onClick={() => setActiveTab('metered')} 
-                      className={`flex-1 py-2 text-sm font-bold rounded-md transition-colors ${activeTab === 'metered' ? 'bg-primary text-white shadow-lg shadow-primary/20' : 'text-slate-400 hover:text-white'}`}
+                      onClick={() => { setActiveTab('fixed_amp'); setSubForm({...subForm, type: 'Fixed Amp'}); }} 
+                      className={`relative z-10 flex-1 py-2 text-sm font-bold transition-colors ${activeTab === 'fixed_amp' ? 'text-white bg-primary rounded shadow' : 'text-slate-400 hover:text-white'}`}
                     >
-                      {t('buildingsubscriptions.metered_kwh', { defaultValue: 'Metered (kWh)' })}
+                      Fixed Amp
+                    </button>
+                    <button 
+                      onClick={() => { setActiveTab('meter'); setSubForm({...subForm, type: 'Meter'}); }} 
+                      className={`relative z-10 flex-1 py-2 text-sm font-bold transition-colors ${activeTab === 'meter' ? 'text-white bg-primary rounded shadow' : 'text-slate-400 hover:text-white'}`}
+                    >
+                      Meter Reading
                     </button>
                   </div>
                 </>
               );
             })()}
             
-            {activeTab === 'monthly' && (
+            {activeTab === 'fixed_monthly' && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.amps', { defaultValue: `Amps` })}</label>
+                  <label className="block text-sm font-medium text-muted mb-1">Fixed Monthly Fee (CFA)</label>
                   <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                    value={monthlyForm.amps} onChange={e => setMonthlyForm({...monthlyForm, amps: e.target.value})} />
+                    value={subForm.monthly_fee} onChange={e => setSubForm({...subForm, monthly_fee: e.target.value})} />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.cost_per_amp_cfa', { defaultValue: `Cost per Amp (CFA)` })}</label>
-                  <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                    value={monthlyForm.cost_per_amp} onChange={e => setMonthlyForm({...monthlyForm, cost_per_amp: e.target.value})} />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
+                {/* Auto-date info */}
+                <div className="flex items-start gap-3 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-xl">
+                  <span className="text-indigo-400 text-lg mt-0.5">📅</span>
                   <div>
-                    <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.start_date', { defaultValue: `Start Date` })}</label>
-                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                      value={monthlyForm.start_date} onChange={e => setMonthlyForm({...monthlyForm, start_date: e.target.value})} />
+                    <p className="text-sm font-semibold text-indigo-300">Dates are set automatically</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Start: <strong className="text-white">{new Date().toLocaleDateString('en-GB')}</strong> &nbsp;→&nbsp;
+                      End: <strong className="text-white">{new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('en-GB')}</strong>
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">Every new or renewed subscription runs exactly 30 days from today.</p>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.end_date', { defaultValue: `End Date` })}</label>
-                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                      value={monthlyForm.end_date} onChange={e => setMonthlyForm({...monthlyForm, end_date: e.target.value})} />
-                  </div>
-                </div>
-                <div className="pt-2">
-                  <p className="text-sm text-muted">{t('buildingsubscriptions.monthly_fee', { defaultValue: `Monthly Fee:` })} <strong className="text-white">{t('buildingsubscriptions.cfa', { defaultValue: `CFA` })} {(monthlyForm.amps * monthlyForm.cost_per_amp) || 0}</strong></p>
                 </div>
               </div>
             )}
 
-            {activeTab === 'metered' && (
+
+            {activeTab === 'fixed_amp' && (
               <div className="space-y-4">
-                <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex justify-between items-center">
-                   <span className="text-muted">{t('buildingsubscriptions.previous_reading', { defaultValue: `Previous Reading:` })}</span>
-                   <span className="text-xl font-bold text-white">{meterForm.previous_reading} {t('buildingsubscriptions.kw', { defaultValue: `KW` })}</span>
-                </div>
                 <div>
-                  <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.current_reading', { defaultValue: `Current Reading` })}</label>
-                  <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white text-xl font-bold" 
-                    autoFocus
-                    value={meterForm.current_reading} onChange={e => setMeterForm({...meterForm, current_reading: e.target.value})} />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.price_per_kw_cfa', { defaultValue: `Price per KW (CFA)` })}</label>
+                  <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.amps', { defaultValue: `Amps` })}</label>
                   <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                    value={meterForm.price_per_kwh} onChange={e => setMeterForm({...meterForm, price_per_kwh: e.target.value})} />
+                    value={subForm.amps} onChange={e => setSubForm({...subForm, amps: e.target.value})} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.cost_per_amp_cfa', { defaultValue: `Cost per Amp (CFA)` })}</label>
+                  <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                    value={subForm.cost_per_amp} onChange={e => setSubForm({...subForm, cost_per_amp: e.target.value})} />
+                </div>
+                {/* Auto-date info */}
+                <div className="flex items-start gap-3 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-xl">
+                  <span className="text-indigo-400 text-lg mt-0.5">📅</span>
                   <div>
-                    <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.start_date', { defaultValue: `Start Date` })}</label>
-                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                      value={meterForm.start_date} onChange={e => setMeterForm({...meterForm, start_date: e.target.value})} />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.end_date', { defaultValue: `End Date` })}</label>
-                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                      value={meterForm.end_date} onChange={e => setMeterForm({...meterForm, end_date: e.target.value})} />
+                    <p className="text-sm font-semibold text-indigo-300">Dates are set automatically</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Start: <strong className="text-white">{new Date().toLocaleDateString('en-GB')}</strong> &nbsp;→&nbsp;
+                      End: <strong className="text-white">{new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('en-GB')}</strong>
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">Every new or renewed subscription runs exactly 30 days from today.</p>
                   </div>
                 </div>
-                {meterForm.current_reading && (
-                  <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-700/50 mt-6 flex justify-between items-center shadow-inner">
-                    <div>
-                      <p className="text-xs text-muted uppercase tracking-wider mb-1 font-semibold">{t('buildingsubscriptions.consumption', { defaultValue: `Consumption` })}</p>
-                      <p className={`text-xl font-bold ${(meterForm.current_reading - meterForm.previous_reading) > 0 ? 'text-indigo-300' : 'text-danger'}`}>
-                        {meterForm.current_reading - meterForm.previous_reading} {t('buildingsubscriptions.kwh', { defaultValue: `kWh` })}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-muted uppercase tracking-wider mb-1 font-semibold">{t('buildingsubscriptions.estimated_cost', { defaultValue: `Estimated Cost` })}</p>
-                      <p className={`text-2xl font-black ${(meterForm.current_reading - meterForm.previous_reading) > 0 ? 'text-success' : 'text-danger'}`}>
-                        {t('buildingsubscriptions.cfa', { defaultValue: `CFA` })} {((meterForm.current_reading - meterForm.previous_reading) * meterForm.price_per_kwh).toLocaleString(undefined, { minimumFractionDigits: 0 })}
-                      </p>
-                    </div>
-                  </div>
-                )}
+                <div className="pt-2">
+                  <p className="text-sm text-muted">{t('buildingsubscriptions.monthly_fee', { defaultValue: `Monthly Fee:` })} <strong className="text-white">{t('buildingsubscriptions.cfa', { defaultValue: `CFA` })} {(subForm.amps * subForm.cost_per_amp) || 0}</strong></p>
+                </div>
               </div>
             )}
+
+
+
+            {activeTab === 'meter' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Start kWh (Initial Reading)</label>
+                    <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                      value={subForm.last_meter_reading} onChange={e => setSubForm({...subForm, last_meter_reading: e.target.value})} placeholder="e.g., 1" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Current kWh (End of Month 1)</label>
+                    <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                      value={subForm.current_reading} onChange={e => setSubForm({...subForm, current_reading: e.target.value})} placeholder="e.g., 120" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-muted mb-1">Price per kWh (CFA)</label>
+                    <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                      value={subForm.price_per_kwh} onChange={e => setSubForm({...subForm, price_per_kwh: e.target.value})} placeholder="e.g., 150" />
+                  </div>
+                </div>
+                {/* Auto-date info */}
+                <div className="flex items-start gap-3 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-xl">
+                  <span className="text-indigo-400 text-lg mt-0.5">📅</span>
+                  <div>
+                    <p className="text-sm font-semibold text-indigo-300">Dates are set automatically</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Start: <strong className="text-white">{new Date().toLocaleDateString('en-GB')}</strong> &nbsp;→&nbsp;
+                      End: <strong className="text-white">{new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('en-GB')}</strong>
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">The agent will capture the meter reading each month. Invoices are generated based on consumption.</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
 
             <div className="flex justify-end gap-3 mt-8">
               <button onClick={() => setSelectedApt(null)} className="px-6 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors">{t('buildingsubscriptions.cancel', { defaultValue: `Cancel` })}</button>
               <button 
                 onClick={() => {
-                  if (activeTab === 'monthly') monthlyMutation.mutate(monthlyForm);
-                  else meterMutation.mutate(meterForm);
+                  monthlyMutation.mutate(subForm);
                 }}
                 className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors"
-                disabled={activeTab === 'monthly' ? monthlyMutation.isLoading : meterMutation.isLoading}
+                disabled={monthlyMutation.isLoading}
               >
-                {activeTab === 'monthly' ? 'Save Subscription' : 'Submit Reading'}
+                {monthlyMutation.isLoading ? 'Saving...' : 'Save Subscription'}
               </button>
             </div>
           </div>
@@ -459,9 +659,21 @@ const BuildingSubscriptions = () => {
                         <td className="py-3 text-success">{inv.amount_paid}</td>
                         <td className="py-3 text-danger font-bold">{(inv.amount - inv.amount_paid) > 0 ? (inv.amount - inv.amount_paid) : 0}</td>
                         <td className="py-3 print:hidden text-right">
-                          <button onClick={() => navigate(`/apartments/${invoiceModalApt}/electricity`)} className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs border border-slate-700 transition-colors">
-                            Pay Record
-                          </button>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => {
+                                setPayInvoiceModal(inv);
+                                setPayInvoiceAmount(inv.amount - inv.amount_paid > 0 ? inv.amount - inv.amount_paid : 0);
+                              }}
+                              disabled={(inv.amount - inv.amount_paid) <= 0}
+                              className="px-3 py-1 bg-primary/80 hover:bg-primary text-white rounded text-xs border border-primary/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              Pay Record
+                            </button>
+                            <button onClick={() => handlePrintInvoice(inv)} className="px-3 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded text-xs shadow-md transition-colors">
+                              Print
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -475,7 +687,7 @@ const BuildingSubscriptions = () => {
             
             <div className="flex justify-end gap-3 mt-8 print:hidden">
               <button onClick={() => setInvoiceModalApt(null)} className="px-6 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors">Close</button>
-              <button onClick={() => window.print()} className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors flex items-center gap-2">
+              <button onClick={handlePrintInvoiceList} className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors flex items-center gap-2">
                 Print Invoice List
               </button>
             </div>
@@ -487,32 +699,84 @@ const BuildingSubscriptions = () => {
       {renewModalApt && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="glass-card w-full max-w-md p-8 border border-slate-700 shadow-2xl relative animate-in fade-in zoom-in duration-200">
-            <h2 className="text-2xl font-bold text-white mb-2">Renew Subscription</h2>
-            <p className="text-slate-400 mb-8">
-              Would you like to ask the tenant to confirm this renewal, or renew it directly yourself?
-            </p>
-            <div className="flex flex-col sm:flex-row justify-end gap-3">
-              <button 
-                onClick={() => setRenewModalApt(null)} 
-                className="px-4 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => requestRenewalMutation.mutate(renewModalApt)}
-                disabled={requestRenewalMutation.isLoading || directRenewMutation.isLoading}
-                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors border border-slate-600"
-              >
-                {requestRenewalMutation.isLoading ? 'Sending...' : 'Ask Tenant'}
-              </button>
-              <button 
-                onClick={() => directRenewMutation.mutate(renewModalApt)}
-                disabled={requestRenewalMutation.isLoading || directRenewMutation.isLoading}
-                className="px-4 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors font-bold"
-              >
-                {directRenewMutation.isLoading ? 'Renewing...' : 'Renew Directly'}
-              </button>
-            </div>
+            {(() => {
+              const aptDetails = apartments?.find(a => a.apartment_id === renewModalApt);
+              const isMetered = !aptDetails?.type || (aptDetails.type !== 'Fixed Amp' && aptDetails.type !== 'Fixed Monthly');
+
+              if (isMetered) {
+                return (
+                  <div className="space-y-4">
+                    <h2 className="text-2xl font-bold text-white mb-4">Direct Renew</h2>
+                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex justify-between items-center">
+                       <span className="text-muted">Previous reading was {meterForm.previous_reading}. What is the current reading?</span>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-muted mb-1">{t('buildingsubscriptions.current_reading', { defaultValue: `Current Reading` })}</label>
+                      <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white text-xl font-bold" 
+                        autoFocus
+                        value={meterForm.current_reading} onChange={e => setMeterForm({...meterForm, current_reading: e.target.value})} />
+                    </div>
+                    {meterForm.current_reading && (
+                      <div className="bg-slate-900/80 p-5 rounded-xl border border-slate-700/50 mt-6 flex justify-between items-center shadow-inner">
+                        <div>
+                          <p className="text-xs text-muted uppercase tracking-wider mb-1 font-semibold">{t('buildingsubscriptions.consumption', { defaultValue: `Consumption` })}</p>
+                          <p className={`text-xl font-bold ${(meterForm.current_reading - meterForm.previous_reading) > 0 ? 'text-indigo-300' : 'text-danger'}`}>
+                            {meterForm.current_reading - meterForm.previous_reading} {t('buildingsubscriptions.kwh', { defaultValue: `kWh` })}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-muted uppercase tracking-wider mb-1 font-semibold">{t('buildingsubscriptions.estimated_cost', { defaultValue: `Estimated Cost` })}</p>
+                          <p className={`text-2xl font-black ${(meterForm.current_reading - meterForm.previous_reading) > 0 ? 'text-success' : 'text-danger'}`}>
+                            {t('buildingsubscriptions.cfa', { defaultValue: `CFA` })} {((meterForm.current_reading - meterForm.previous_reading) * meterForm.price_per_kwh).toLocaleString(undefined, { minimumFractionDigits: 0 })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-3 mt-8">
+                      <button onClick={() => setRenewModalApt(null)} className="px-6 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors">{t('buildingsubscriptions.cancel', { defaultValue: `Cancel` })}</button>
+                      <button 
+                        onClick={() => meterMutation.mutate({aptId: renewModalApt, data: meterForm})}
+                        disabled={!meterForm.current_reading || meterMutation.isLoading}
+                        className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors"
+                      >
+                        {meterMutation.isLoading ? 'Saving...' : 'Save & Renew'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              } else {
+                return (
+                  <>
+                    <h2 className="text-2xl font-bold text-white mb-2">Renew Subscription</h2>
+                    <p className="text-slate-400 mb-8">
+                      Would you like to ask the tenant to confirm this renewal, or renew it directly yourself?
+                    </p>
+                    <div className="flex flex-col sm:flex-row justify-end gap-3">
+                      <button 
+                        onClick={() => setRenewModalApt(null)} 
+                        className="px-4 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={() => requestRenewalMutation.mutate(renewModalApt)}
+                        disabled={requestRenewalMutation.isLoading || directRenewMutation.isLoading}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors border border-slate-600"
+                      >
+                        {requestRenewalMutation.isLoading ? 'Sending...' : 'Ask Tenant'}
+                      </button>
+                      <button 
+                        onClick={() => directRenewMutation.mutate(renewModalApt)}
+                        disabled={requestRenewalMutation.isLoading || directRenewMutation.isLoading}
+                        className="px-4 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors font-bold"
+                      >
+                        {directRenewMutation.isLoading ? 'Renewing...' : 'Renew Directly'}
+                      </button>
+                    </div>
+                  </>
+                );
+              }
+            })()}
           </div>
         </div>
       )}
@@ -522,6 +786,75 @@ const BuildingSubscriptions = () => {
         <div className={`fixed bottom-4 right-4 text-white px-6 py-3 rounded-lg shadow-2xl z-50 animate-bounce ${toast.type === 'error' ? 'bg-danger' : 'bg-emerald-600'}`}>
           {toast.message}
         </div>
+      )}
+
+      {/* Pay Invoice Modal */}
+      {payInvoiceModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="glass-card p-6 w-full max-w-md border border-slate-700 animate-in zoom-in-95 duration-200">
+            <h3 className="text-xl font-bold mb-2 text-white">Pay Invoice</h3>
+            <p className="text-sm text-slate-400 mb-6 bg-slate-800/50 p-3 rounded-lg border border-slate-700">
+              <span className="block mb-1">Due Date: <strong className="text-white">{payInvoiceModal.due_date}</strong></span>
+              <span className="block mb-1">Total: <strong className="text-white">CFA {Number(payInvoiceModal.amount).toLocaleString()}</strong></span>
+              <span className="block">Already Paid: <strong className="text-success">CFA {Number(payInvoiceModal.amount_paid || 0).toLocaleString()}</strong></span>
+            </p>
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-muted mb-2">Amount to Pay (CFA)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={payInvoiceModal.amount - (payInvoiceModal.amount_paid || 0)}
+                  value={payInvoiceAmount}
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    const max = payInvoiceModal.amount - (payInvoiceModal.amount_paid || 0);
+                    setPayInvoiceAmount(val > max ? max : e.target.value);
+                  }}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-primary text-lg font-bold"
+                  autoFocus
+                />
+                <p className="text-xs text-orange-400 mt-1">Remaining: CFA {(payInvoiceModal.amount - (payInvoiceModal.amount_paid || 0)).toLocaleString()}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-muted mb-2">Payment Method</label>
+                <select
+                  value={payInvoiceMethod}
+                  onChange={e => setPayInvoiceMethod(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-primary"
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
+                  <option value="Mobile Money">Mobile Money</option>
+                  <option value="Check">Check</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setPayInvoiceModal(null); setPayInvoiceAmount(''); setPayInvoiceMethod('Cash'); }}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg flex-1 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => payInvoiceMutation.mutate({ id: payInvoiceModal.id, amount: Number(payInvoiceAmount) })}
+                disabled={!payInvoiceAmount || Number(payInvoiceAmount) <= 0 || payInvoiceMutation.isPending}
+                className="bg-primary hover:bg-indigo-600 text-white px-4 py-2 rounded-lg flex-1 disabled:opacity-50 transition-colors font-medium shadow-lg shadow-primary/20"
+              >
+                {payInvoiceMutation.isPending ? 'Processing...' : 'Confirm Payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Render the new Unified Billing Modal */}
+      {manageBillingApt && (
+        <ApartmentBillingModal 
+          apartmentId={manageBillingApt} 
+          onClose={() => setManageBillingApt(null)} 
+        />
       )}
     </div>
   );

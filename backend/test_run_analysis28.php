@@ -1,0 +1,1 @@
+<?php $ch = curl_init("http://localhost/Bitar/backend/api/generator/runAnalysis"); curl_setopt($ch, CURLOPT_RETURNTRANSFER, true); curl_setopt($ch, CURLOPT_POST, true); curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(["log_id" => 28])); curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]); echo curl_exec($ch);

@@ -8,13 +8,26 @@ class RentController {
 
     public function index() {
         AuthMiddleware::requireLogin();
+        require_once __DIR__ . '/../services/RentGenerationService.php';
+        RentGenerationService::runCatchUpIfDue();
         
         $stmt = $this->db->query("
-            SELECT ri.*, 
+            SELECT ri.id, ri.contract_id, ri.rent_profile_id, ri.rent_period_id, ri.invoice_number,
+                   ri.amount, ri.period_start, ri.period_end, ri.due_date, ri.notes, ri.created_at,
+                   ri.payment_method, ri.payment_date, ri.reference_number, ri.bank_name,
+                   ri.account_number, ri.proof_of_payment, ri.qr_requested_at,
+                   CASE 
+                       WHEN ri.status = 'Voided' THEN 'Voided'
+                       WHEN (ri.amount - COALESCE((SELECT SUM(amount) FROM rent_payments rp WHERE rp.invoice_id = ri.id), 0)) <= 0.001 AND ri.amount > 0 THEN 'Paid'
+                       WHEN COALESCE((SELECT SUM(amount) FROM rent_payments rp WHERE rp.invoice_id = ri.id), 0) > 0 THEN 'Partial'
+                       WHEN ri.due_date < CURRENT_DATE() THEN 'Overdue'
+                       ELSE 'Unpaid'
+                   END as status,
                    a.code as apartment_code, b.name as building_name, b.id as building_id,
-                   t.full_name as tenant_name, t.phone as tenant_phone,
+                   t.id as tenant_id, t.full_name as tenant_name, t.phone as tenant_phone,
                    ia.id as insurance_account_id, ia.total_saved as insurance_balance,
-                   (ri.amount - COALESCE((SELECT SUM(amount) FROM rent_payments rp WHERE rp.invoice_id = ri.id), 0)) as outstanding_debt
+                   (ri.amount - COALESCE((SELECT SUM(amount) FROM rent_payments rp WHERE rp.invoice_id = ri.id), 0)) as outstanding_debt,
+                   COALESCE((SELECT SUM(amount) FROM rent_payments rp WHERE rp.invoice_id = ri.id), 0) as paid_amount
             FROM rent_invoices ri
             JOIN contracts c ON ri.contract_id = c.id
             JOIN apartments a ON c.apartment_id = a.id
@@ -73,7 +86,7 @@ class RentController {
 
     private function updateInvoiceStatus($invoice_id) {
         $stmt = $this->db->prepare("
-            SELECT ri.amount as total_amount, COALESCE(SUM(rp.amount), 0) as paid_amount 
+            SELECT ri.amount as total_amount, ri.due_date, COALESCE(SUM(rp.amount), 0) as paid_amount 
             FROM rent_invoices ri
             LEFT JOIN rent_payments rp ON ri.id = rp.invoice_id
             WHERE ri.id = ?
@@ -83,91 +96,74 @@ class RentController {
         $row = $stmt->fetch();
 
         if ($row) {
+            $isOverdue = ($row['due_date'] < date('Y-m-d'));
             if ($row['paid_amount'] >= $row['total_amount']) {
                 $status = 'Paid';
             } elseif ($row['paid_amount'] > 0) {
                 $status = 'Partial';
             } else {
-                $status = 'Unpaid'; // Check overdue in a cron or separate logic
+                $status = $isOverdue ? 'Overdue' : 'Unpaid';
             }
             $stmt = $this->db->prepare("UPDATE rent_invoices SET status = ? WHERE id = ?");
             $stmt->execute([$status, $invoice_id]);
+            
+            $this->syncArchiveLedger($invoice_id);
         }
     }
 
-    // Call this manually or via a cron job
+    private function syncArchiveLedger($invoice_id) {
+        $stmt = $this->db->prepare("SELECT c.tenant_id FROM rent_invoices ri JOIN contracts c ON ri.contract_id = c.id WHERE ri.id = ?");
+        $stmt->execute([$invoice_id]);
+        $tenant_id = $stmt->fetchColumn();
+
+        if ($tenant_id) {
+            $archStmt = $this->db->prepare("SELECT id FROM tenant_archive_history WHERE tenant_id = ?");
+            $archStmt->execute([$tenant_id]);
+            $archiveId = $archStmt->fetchColumn();
+
+            if ($archiveId) {
+                $contractStmt = $this->db->prepare("SELECT id FROM contracts WHERE tenant_id = ?");
+                $contractStmt->execute([$tenant_id]);
+                $contractIds = $contractStmt->fetchAll(PDO::FETCH_COLUMN);
+
+                if (!empty($contractIds)) {
+                    $placeholders = implode(',', array_fill(0, count($contractIds), '?'));
+                    $rentStmt = $this->db->prepare("SELECT * FROM rent_invoices WHERE contract_id IN ($placeholders)");
+                    $rentStmt->execute($contractIds);
+                    $rentalLedger = $rentStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                    $update = $this->db->prepare("UPDATE tenant_archive_history SET rental_ledger = ? WHERE id = ?");
+                    $update->execute([json_encode($rentalLedger), $archiveId]);
+                }
+            }
+        }
+    }
+
+    // Call this manually, via scheduler, or API
     public function generateInvoices() {
         AuthMiddleware::requireLogin();
-        
-        // Only generate for active contracts where rent is active
-        $stmt = $this->db->query("
-            SELECT c.id as contract_id, a.monthly_rent, c.start_date, c.end_date
-            FROM contracts c
-            JOIN apartments a ON c.apartment_id = a.id
-            WHERE c.status IN ('Active', 'Approved') AND c.rent_status = 'Active'
-        ");
-        $contracts = $stmt->fetchAll();
+        require_once __DIR__ . '/../services/RentGenerationService.php';
+        $result = RentGenerationService::generateDueInvoices();
+        echo json_encode([
+            'message' => "{$result['invoices_created']} invoices generated successfully.",
+            'invoices_created' => $result['invoices_created'],
+            'details' => $result['details'],
+            'errors' => $result['errors']
+        ]);
+    }
 
-        $generated = 0;
-        $today = new DateTime();
-        $targetDate = clone $today;
-        $targetDate->modify('+7 days'); // Generate if within 7 days of period end
+    public function processAutoGeneration() {
+        AuthMiddleware::requireLogin();
+        require_once __DIR__ . '/../services/RentGenerationService.php';
+        $result = RentGenerationService::runDaily();
+        echo json_encode($result);
+    }
 
-        foreach ($contracts as $contract) {
-            if (!$contract['start_date']) continue;
-
-            // Find the latest invoice for this contract
-            $invStmt = $this->db->prepare("SELECT * FROM rent_invoices WHERE contract_id = ? ORDER BY period_end DESC LIMIT 1");
-            $invStmt->execute([$contract['contract_id']]);
-            $lastInvoice = $invStmt->fetch();
-
-            $newStart = null;
-            if ($lastInvoice && $lastInvoice['period_end']) {
-                $newStart = new DateTime($lastInvoice['period_end']);
-                $newStart->modify('+1 day');
-            } else {
-                $newStart = new DateTime($contract['start_date']);
-            }
-
-            $endDate = new DateTime($contract['end_date']);
-
-            // Generate invoices month by month up to the target date, but don't exceed contract end date
-            while ($newStart < $endDate && $newStart <= $targetDate) {
-                $cycleEnd = clone $newStart;
-                $cycleEnd->modify('+1 month');
-                $cycleEnd->modify('-1 day');
-
-                if ($cycleEnd > $endDate) {
-                    $cycleEnd = clone $endDate;
-                }
-
-                $month = $newStart->format('m');
-                $year = $newStart->format('Y');
-                $due_date = $newStart->format('Y-m-d'); // Due at start of period
-                
-                $invoice_num = 'INV-' . $year . $month . '-' . $contract['contract_id'];
-                
-                // Check if this specific period already exists just to be safe
-                $check = $this->db->prepare("SELECT COUNT(*) FROM rent_invoices WHERE contract_id = ? AND period_start = ?");
-                $check->execute([$contract['contract_id'], $newStart->format('Y-m-d')]);
-                
-                if ($check->fetchColumn() == 0) {
-                    $insertInvoice = $this->db->prepare("
-                        INSERT INTO rent_invoices (contract_id, invoice_number, amount, due_date, status, period_start, period_end) 
-                        VALUES (?, ?, ?, ?, 'Unpaid', ?, ?)
-                    ");
-                    $insertInvoice->execute([$contract['contract_id'], $invoice_num, $contract['monthly_rent'], $due_date, $newStart->format('Y-m-d'), $cycleEnd->format('Y-m-d')]);
-                    $generated++;
-                }
-
-                $newStart->modify('+1 month');
-            }
-        }
-
-        echo json_encode(['message' => "$generated invoices generated successfully."]);
-        if ($generated > 0) {
-            AuditLogger::log('CREATE', 'RentInvoice', null, "Auto-generated $generated missing invoices");
-        }
+    public function reconcileStatuses() {
+        AuthMiddleware::requireLogin();
+        require_once __DIR__ . '/../services/RentGenerationService.php';
+        $result = RentGenerationService::reconcileInvoiceStatuses();
+        echo json_encode($result);
     }
 
     public function addHistorical() {
@@ -213,6 +209,8 @@ class RentController {
 
     public function rentManagementDashboard() {
         AuthMiddleware::requireLogin();
+        require_once __DIR__ . '/../services/RentGenerationService.php';
+        RentGenerationService::runCatchUpIfDue();
         
         $start_date = !empty($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-01');
         $end_date = !empty($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-t');

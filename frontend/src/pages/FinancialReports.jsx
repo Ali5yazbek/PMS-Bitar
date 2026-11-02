@@ -1,6 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../api/axios';
+import PrintLogo from '../components/PrintLogo';
 import {
   FileText, Building, Home, Users, DollarSign, Shield, Zap,
   Activity, Package, ChevronDown, Search, Filter, Download,
@@ -1044,6 +1045,7 @@ const FinancialReports = () => {
           {/* Header */}
           <div className="flex justify-between items-end border-b-2 border-[#7c97ac] pb-6 mb-10">
             <div>
+              <PrintLogo className="h-16 w-auto object-contain mb-2 print:h-16 print:w-auto" />
               <h1 className="text-3xl font-black uppercase tracking-widest text-[#2c3e50] mb-1">Bitar PMS</h1>
               <h2 className="text-sm text-[#7c97ac] font-bold tracking-widest uppercase">Financial Report</h2>
             </div>

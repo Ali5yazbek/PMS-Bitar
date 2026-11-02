@@ -240,103 +240,141 @@ class ReportsController {
 
     public function detailedFinancialBuildings() {
         AuthMiddleware::requireLogin();
-        
+
         $start = $_GET['start_date'] ?? date('Y-m-01');
-        $end = $_GET['end_date'] ?? date('Y-m-t');
+        $end   = $_GET['end_date']   ?? date('Y-m-t');
 
-        // Fetch buildings
-        $bStmt = $this->db->query("SELECT id, name FROM buildings ORDER BY name ASC");
-        $buildings = $bStmt->fetchAll(PDO::FETCH_ASSOC);
+        // ── Fetch structural data ──────────────────────────────────────────
+        $buildings  = $this->db->query("SELECT id, name FROM buildings ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
+        $apartments = $this->db->query("SELECT id, building_id, code FROM apartments ORDER BY code ASC")->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fetch apartments with their buildings
-        $aStmt = $this->db->query("SELECT id, building_id, code FROM apartments ORDER BY code ASC");
-        $apartments = $aStmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // Fetch invoices in the date range
-        $sqlInvoices = "
-            SELECT ri.id as invoice_id, ri.invoice_number, ri.amount, ri.due_date, ri.status,
-                   c.apartment_id,
-                   COALESCE((SELECT SUM(amount) FROM rent_payments rp WHERE rp.invoice_id = ri.id), 0) as paid_amount
-            FROM rent_invoices ri
-            JOIN contracts c ON ri.contract_id = c.id
-            WHERE ri.due_date >= ? AND ri.due_date <= ?
-            ORDER BY ri.due_date DESC
-        ";
-        $iStmt = $this->db->prepare($sqlInvoices);
-        $iStmt->execute([$start, $end]);
-        $invoices = $iStmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // Build hierarchy
-        $global = [
-            'total_income' => 0,
-            'total_received' => 0,
-            'total_remaining' => 0
-        ];
-
-        // Map invoices to apartments
+        // Pre-build apartment map
         $aptsMap = [];
         foreach ($apartments as $apt) {
             $aptsMap[$apt['id']] = [
-                'id' => $apt['id'],
-                'building_id' => $apt['building_id'],
-                'code' => $apt['code'],
-                'total_income' => 0,
-                'total_received' => 0,
+                'id'              => $apt['id'],
+                'building_id'     => $apt['building_id'],
+                'code'            => $apt['code'],
+                'total_income'    => 0,
+                'total_received'  => 0,
                 'total_remaining' => 0,
-                'invoices' => []
+                'invoices'        => [],
+                'tenant_names'    => [],
             ];
         }
 
-        foreach ($invoices as $inv) {
-            $aptId = $inv['apartment_id'];
-            if (isset($aptsMap[$aptId])) {
-                $invAmount = (float)$inv['amount'];
-                $paidAmount = (float)$inv['paid_amount'];
-                $remaining = $invAmount - $paidAmount;
+        $global = [
+            'total_income'    => 0,
+            'total_received'  => 0,
+            'total_remaining' => 0,
+        ];
 
-                $aptsMap[$aptId]['invoices'][] = $inv;
-                $aptsMap[$aptId]['total_income'] += $invAmount;
-                $aptsMap[$aptId]['total_received'] += $paidAmount;
-                $aptsMap[$aptId]['total_remaining'] += $remaining;
+        // ════════════════════════════════════════════════════════════════════
+        // STREAM 1 — RENT (Only Rent)
+        // ════════════════════════════════════════════════════════════════════
 
-                $global['total_income'] += $invAmount;
-                $global['total_received'] += $paidAmount;
-                $global['total_remaining'] += $remaining;
-            }
+        // Rent invoices billed in period (Voided excluded; terminated contracts included)
+        $rentInvStmt = $this->db->prepare("
+            SELECT ri.id AS invoice_id, ri.invoice_number, ri.amount, ri.due_date, ri.status, c.apartment_id, t.full_name as tenant_name
+            FROM rent_invoices ri
+            JOIN contracts c ON ri.contract_id = c.id
+            JOIN tenants t ON c.tenant_id = t.id
+            WHERE ri.due_date BETWEEN ? AND ?
+              AND ri.status != 'Voided'
+            ORDER BY ri.due_date DESC
+        ");
+        $rentInvStmt->execute([$start, $end]);
+        $rentInvRows = $rentInvStmt->fetchAll(PDO::FETCH_ASSOC);
+        $rentInvIds  = array_column($rentInvRows, 'invoice_id');
+
+        // Payments received in period (by payment date, not invoice date)
+        $rentPayStmt = $this->db->prepare("
+            SELECT rp.invoice_id, SUM(rp.amount) AS period_paid
+            FROM rent_payments rp WHERE rp.date BETWEEN ? AND ?
+            GROUP BY rp.invoice_id
+        ");
+        $rentPayStmt->execute([$start, $end]);
+        $rentPayMap = [];
+        foreach ($rentPayStmt->fetchAll(PDO::FETCH_ASSOC) as $p) {
+            $rentPayMap[$p['invoice_id']] = (float)$p['period_paid'];
         }
 
-        // Map apartments to buildings
+        foreach ($rentInvRows as $inv) {
+            $aptId = $inv['apartment_id'];
+            if (!isset($aptsMap[$aptId])) continue;
+            
+            $invAmt     = (float)$inv['amount'];
+            $paidPeriod = $rentPayMap[$inv['invoice_id']] ?? 0;
+            
+            $allPaidS   = $this->db->prepare("SELECT COALESCE(SUM(amount),0) FROM rent_payments WHERE invoice_id = ?");
+            $allPaidS->execute([$inv['invoice_id']]);
+            $allPaid    = (float)$allPaidS->fetchColumn();
+            
+            $remaining  = max(0, $invAmt - $allPaid);
+            
+            $inv['paid_amount'] = $paidPeriod; 
+            $inv['all_paid_amount'] = $allPaid;
+            $inv['remaining_amount'] = $remaining;
+            
+            $aptsMap[$aptId]['invoices'][]     = $inv;
+            $aptsMap[$aptId]['total_income']   += $invAmt;
+            $aptsMap[$aptId]['total_received'] += $paidPeriod;
+            $aptsMap[$aptId]['total_remaining']+= $remaining;
+            
+            if (!empty($inv['tenant_name'])) {
+                $aptsMap[$aptId]['tenant_names'][$inv['tenant_name']] = true;
+            }
+            
+            $global['total_income']    += $invAmt;
+            $global['total_received']  += $paidPeriod;
+            $global['total_remaining'] += $remaining;
+        }
+
+        // Payments in-period on rent invoices outside date range (overdue cleared this period)
+        foreach ($rentPayMap as $invId => $paidAmt) {
+            if (in_array($invId, $rentInvIds)) continue;
+            $xS = $this->db->prepare("SELECT ri.status, c.apartment_id, t.full_name as tenant_name FROM rent_invoices ri JOIN contracts c ON ri.contract_id = c.id JOIN tenants t ON c.tenant_id = t.id WHERE ri.id = ? AND ri.status != 'Voided'");
+            $xS->execute([$invId]);
+            $xR = $xS->fetch(PDO::FETCH_ASSOC);
+            if (!$xR || !isset($aptsMap[$xR['apartment_id']])) continue;
+            
+            $aptsMap[$xR['apartment_id']]['total_received'] += $paidAmt;
+            if (!empty($xR['tenant_name'])) {
+                $aptsMap[$xR['apartment_id']]['tenant_names'][$xR['tenant_name']] = true;
+            }
+            $global['total_received'] += $paidAmt;
+        }
+
+        // ── Map apartments → buildings ─────────────────────────────────────
         $buildsMap = [];
         foreach ($buildings as $b) {
             $buildsMap[$b['id']] = [
-                'id' => $b['id'],
-                'name' => $b['name'],
-                'total_income' => 0,
-                'total_received' => 0,
+                'id'              => $b['id'], 
+                'name'            => $b['name'],
+                'total_income'    => 0, 
+                'total_received'  => 0, 
                 'total_remaining' => 0,
-                'apartments' => []
+                'apartments'      => [],
             ];
         }
 
         foreach ($aptsMap as $apt) {
             $bId = $apt['building_id'];
-            if (isset($buildsMap[$bId])) {
-                $buildsMap[$bId]['apartments'][] = $apt;
-                $buildsMap[$bId]['total_income'] += $apt['total_income'];
-                $buildsMap[$bId]['total_received'] += $apt['total_received'];
-                $buildsMap[$bId]['total_remaining'] += $apt['total_remaining'];
-            }
+            if (!isset($buildsMap[$bId])) continue;
+            
+            $apt['tenant_names_str'] = !empty($apt['tenant_names']) ? implode(', ', array_keys($apt['tenant_names'])) : 'Vacant';
+            
+            $buildsMap[$bId]['apartments'][] = $apt;
+            $buildsMap[$bId]['total_income']    += $apt['total_income'];
+            $buildsMap[$bId]['total_received']  += $apt['total_received'];
+            $buildsMap[$bId]['total_remaining'] += $apt['total_remaining'];
         }
 
-        // Convert map to array
-        $resultBuildings = array_values($buildsMap);
-
         echo json_encode([
-            'global' => $global,
-            'buildings' => $resultBuildings
+            'global'    => $global,
+            'buildings' => array_values($buildsMap),
         ]);
     }
-
     public function generatorSubscriptions() {
         AuthMiddleware::requireLogin();
         
@@ -363,8 +401,7 @@ class ReportsController {
                    es.next_billing_date, es.end_date, es.status as subscription_status,
                    DATEDIFF(COALESCE(es.next_billing_date, es.end_date), CURRENT_DATE) as days_remaining
             FROM apartments a
-            LEFT JOIN contracts c ON a.id = c.apartment_id AND c.status = 'Active'
-            LEFT JOIN tenants t ON c.tenant_id = t.id
+            LEFT JOIN tenants t ON t.id = (SELECT tenant_id FROM contracts WHERE apartment_id = a.id ORDER BY id DESC LIMIT 1)
             LEFT JOIN electricity_subscriptions es ON a.id = es.apartment_id
             WHERE es.id IS NOT NULL
         ";
@@ -378,11 +415,11 @@ class ReportsController {
         $aStmt->execute($aParams);
         $apartments = $aStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fetch invoices for generator subscriptions
+        // Fetch invoices for generator subscriptions (including Meter)
         $iQuery = "
             SELECT ei.apartment_id, ei.amount, ei.amount_paid, ei.status, ei.type
             FROM electricity_invoices ei
-            WHERE (ei.type IN ('Subscription', 'Fixed Subscription') OR ei.type = '')
+            WHERE (ei.type IN ('Subscription', 'Fixed Subscription', 'Meter') OR ei.type = '')
         ";
         $iParams = [];
         if ($startDate) {

@@ -1,659 +1,889 @@
-import { useTranslation } from 'react-i18next';
-import React, { useState } from 'react';
+import React, { useState, useCallback, memo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../api/axios';
-import { CheckCircle, XCircle, Zap, BatteryCharging, AlertCircle, Building2, ChevronRight, Home, User, Eye, Filter, X, Search, History } from 'lucide-react';
+import { 
+  CheckCircle, XCircle, Zap, AlertCircle, Building2, 
+  ChevronRight, Home, User, Eye, X, History,
+  AlertTriangle, Settings, BarChart2, CheckSquare, Maximize2, RotateCw, RefreshCw, Check, Search, Filter
+} from 'lucide-react';
 
-const ReadingsVerification = () => {
-  const { t } = useTranslation();
+// ─── Pure Sub-Components (memoized to prevent re-renders) ────────────────────
 
-  const getLocalISODate = () => {
-    const d = new Date();
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().split('T')[0];
-  };
+const ConfidenceBar = memo(({ score, riskLevel }) => {
+  let color = 'bg-danger';
+  if (score >= 80) color = 'bg-success';
+  else if (score >= 70) color = 'bg-warning';
+  else if (score >= 40) color = 'bg-orange-500';
+  return (
+    <div className="w-full">
+      <div className="flex justify-between text-xs mb-1">
+        <span className="font-semibold text-slate-300">Confidence Score</span>
+        <span className="font-bold">{score}% ({riskLevel?.toUpperCase()})</span>
+      </div>
+      <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+        <div className={`h-full ${color} transition-all duration-500`} style={{ width: `${score}%` }} />
+      </div>
+    </div>
+  );
+});
 
-  const [activeTab, setActiveTab] = useState('electricity');
-  const [selectedReading, setSelectedReading] = useState(null);
-  const [rejectionReason, setRejectionReason] = useState('');
-  const [reportStartDate, setReportStartDate] = useState(getLocalISODate());
-  const [reportEndDate, setReportEndDate] = useState(getLocalISODate());
-  const [selectedAgentTasks, setSelectedAgentTasks] = useState(null);
-  const [expandedTaskId, setExpandedTaskId] = useState(null);
+const AnomalyBadge = memo(({ warning }) => {
+  let colorClass = 'text-blue-400 bg-blue-400/10 border-blue-400/20';
+  if (warning.level === 'critical') colorClass = 'text-red-400 bg-red-400/10 border-red-400/20';
+  else if (warning.level === 'high') colorClass = 'text-orange-400 bg-orange-400/10 border-orange-400/20';
+  else if (warning.level === 'medium') colorClass = 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20';
+  return (
+    <div className={`text-xs px-2 py-1 rounded-md border flex items-start gap-1.5 ${colorClass}`}>
+      <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+      <div>
+        <div className="font-bold">{warning.title}</div>
+        <div className="opacity-80 leading-tight mt-0.5">{warning.message}</div>
+      </div>
+    </div>
+  );
+});
+
+// ─── Review Side Panel (separate component to avoid re-renders) ──────────────
+
+// Normalize frontend tab name to backend API type
+// Frontend uses 'subscriptions' (plural), backend expects 'subscription' (singular)
+const apiType = (tab) => tab === 'subscriptions' ? 'subscription' : tab;
+
+const ReviewPanel = memo(({ reviewItem, onClose, activeTab, getFullImageUrl }) => {
   const queryClient = useQueryClient();
+  const [imageZoom, setImageZoom] = useState(1);
+  const [imageRotation, setImageRotation] = useState(0);
+  const [isQuickEdit, setIsQuickEdit] = useState(false);
+  const [editValues, setEditValues] = useState({
+    current_reading: reviewItem?.current_reading || reviewItem?.current_meter_hours || reviewItem?.meter_hours || reviewItem?.current_kwh || reviewItem?.running_hours || '',
+    reading_date: reviewItem?.reading_date || reviewItem?.date || '',
+    notes: reviewItem?.notes || ''
+  });
+  const [isRejectOpen, setIsRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('incorrect_reading');
+  const [rejectComment, setRejectComment] = useState('');
+  const [rejectSeverity, setRejectSeverity] = useState('medium');
 
-  const { data: meterReadings = [], isLoading: loadingMeters } = useQuery({
-    queryKey: ['pendingMeterReadings'],
-    queryFn: async () => {
-      const res = await api.get('/energy/apartments/meter-readings/pending');
-      return res.data;
-    },
-    refetchInterval: 3000,
+  const { data: reviewDetails, isLoading: loadingDetails } = useQuery({
+    queryKey: ['readingAnalysis', activeTab, reviewItem?.id],
+    queryFn: async () => (await api.get(`/approval/analyze/${apiType(activeTab)}/${reviewItem?.id}`)).data,
+    enabled: !!reviewItem,
+    staleTime: 60000,
+    retry: 1,
   });
 
-  const { data: generatorReadings = [], isLoading: loadingGenerators } = useQuery({
-    queryKey: ['pendingGeneratorReadings'],
-    queryFn: async () => {
-      const res = await api.get('/energy/reports/pending');
-      return res.data;
-    },
-    refetchInterval: 3000,
+  const { data: timeline } = useQuery({
+    queryKey: ['readingTimeline', activeTab, reviewItem?.id],
+    queryFn: async () => (await api.get(`/approval/timeline/${apiType(activeTab)}/${reviewItem?.id}`)).data,
+    enabled: !!reviewItem,
+    staleTime: 60000,
+    retry: 1,
   });
 
-  const { data: subReadings = [], isLoading: loadingSubReadings } = useQuery({
-    queryKey: ['pendingSubReadings'],
-    queryFn: async () => {
-      try {
-        const res = await api.get('/energy/agent/subscription-readings/pending');
-        return res.data;
-      } catch (e) {
-        return [];
-      }
-    },
-    refetchInterval: 5000,
-  });
-
-  const { data: agentReports = [], isLoading: loadingAgentReports } = useQuery({
-    queryKey: ['agentReports', reportStartDate, reportEndDate],
-    queryFn: async () => {
-      const res = await api.get(`/energy/admin/agent-reports?start_date=${reportStartDate}&end_date=${reportEndDate}`);
-      return res.data;
-    },
-    enabled: activeTab === 'agent-report',
-  });
-
-  const { data: generatorHistory = [], isLoading: loadingGenHistory } = useQuery({
-    queryKey: ['generatorHistory'],
-    queryFn: async () => {
-      const res = await api.get('/energy/agent/history/generators');
-      return res.data;
-    },
-    enabled: activeTab === 'generator-history',
-  });
-
-  const { data: subTasksData, isLoading: loadingSubHistory } = useQuery({
-    queryKey: ['subHistory'],
-    queryFn: async () => {
-      const res = await api.get('/energy/agent/subscription-tasks');
-      return res.data;
-    },
-    enabled: activeTab === 'subscriptions-history',
-  });
-  const subHistory = subTasksData?.history || [];
-
-  const meterMutation = useMutation({
-    mutationFn: (data) => api.post(`/energy/apartments/meter-readings/${data.id}/verify`, data),
+  const approveMutation = useMutation({
+    mutationFn: (id) => api.post(`/approval/approve/${apiType(activeTab)}/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries(['pendingMeterReadings']);
-      setSelectedReading(null);
-      setRejectionReason('');
+      queryClient.invalidateQueries({ queryKey: ['approvalQueue'] });
+      onClose();
+    },
+    onError: (err) => {
+      alert(err?.response?.data?.error || 'Approval failed. Please try again.');
     }
   });
 
-  const generatorMutation = useMutation({
-    mutationFn: (data) => api.post(`/energy/reports/${data.id}/verify`, data),
+  const rejectMutation = useMutation({
+    mutationFn: ({ id, payload }) => api.post(`/approval/reject/${apiType(activeTab)}/${id}`, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries(['pendingGeneratorReadings']);
-      setSelectedReading(null);
-      setRejectionReason('');
+      queryClient.invalidateQueries({ queryKey: ['approvalQueue'] });
+      setIsRejectOpen(false);
+      onClose();
+    },
+    onError: (err) => {
+      alert(err?.response?.data?.error || 'Rejection failed. Please try again.');
     }
   });
 
-  const subReadingMutation = useMutation({
-    mutationFn: (data) => api.post(`/energy/agent/subscription-readings/${data.id}/verify`, {
-      status: data.status,
-      rejection_reason: data.rejection_reason
-    }),
+  const editMutation = useMutation({
+    mutationFn: ({ id, payload }) => api.put(`/approval/quick-edit/${apiType(activeTab)}/${id}`, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries(['pendingSubReadings']);
-      setSelectedReading(null);
-      setRejectionReason('');
+      queryClient.invalidateQueries({ queryKey: ['approvalQueue'] });
+      queryClient.invalidateQueries({ queryKey: ['readingAnalysis'] });
+      setIsQuickEdit(false);
+    },
+    onError: (err) => {
+      alert(err?.response?.data?.error || 'Edit failed. Please try again.');
     }
   });
 
-  const handleVerify = (status) => {
-    if (status === 'Rejected' && !rejectionReason.trim()) {
-      alert('Please provide a rejection reason.');
-      return;
-    }
-
-    const payload = {
-      id: selectedReading.id,
-      status,
-      rejection_reason: status === 'Rejected' ? rejectionReason : null
-    };
-
-    if (activeTab === 'electricity') {
-      meterMutation.mutate(payload);
-    } else if (activeTab === 'generator') {
-      generatorMutation.mutate(payload);
-    } else if (activeTab === 'subscriptions') {
-      // Subscription readings use 'Accepted' / 'Rejected'
-      subReadingMutation.mutate({ ...payload, status: status === 'Verified' ? 'Accepted' : 'Rejected' });
-    }
-  };
-
-  const getFullImageUrl = (path) => {
-    if (!path) return null;
-    const baseUrl = api.defaults.baseURL.replace(/\/backend\/api$/, '').replace(/\/api$/, '');
-    return `${baseUrl}/${path}`;
-  };
+  const d = reviewDetails?.stats || {};
+  const warnings = reviewDetails?.warnings || [];
+  const photoUrl = getFullImageUrl(reviewItem?.photo_path || reviewItem?.photo_meter_path);
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-background">
-      <div className="flex-1 overflow-y-auto p-8 hide-scrollbar">
-        <h1 className="text-3xl font-bold text-white mb-2">
-          {t('readingsverification.readings_verification', { defaultValue: 'Readings Verification' })}
-        </h1>
-        <p className="text-muted mb-8">
-          {t('readingsverification.review_and_verify_meter_and_ge', { defaultValue: 'Review and verify meter and generator readings submitted by utility agents.' })}
-        </p>
-
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6 border-b border-slate-700 pb-0 flex-wrap">
-          <button
-            onClick={() => setActiveTab('electricity')}
-            className={`px-5 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'electricity' ? 'text-primary border-primary' : 'text-muted border-transparent hover:text-white'}`}
-          >
-            <Zap size={18} />
-            Electricity Meters ({meterReadings?.length || 0})
-          </button>
-          <button
-            onClick={() => setActiveTab('generator')}
-            className={`px-5 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'generator' ? 'text-primary border-primary' : 'text-muted border-transparent hover:text-white'}`}
-          >
-            <BatteryCharging size={18} />
-            Generators ({generatorReadings?.length || 0})
-          </button>
-          <button
-            onClick={() => setActiveTab('subscriptions')}
-            className={`relative px-5 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'subscriptions' ? 'text-indigo-400 border-indigo-400' : 'text-muted border-transparent hover:text-white'}`}
-          >
-            <Zap size={18} className="text-indigo-400" />
-            Subscription Meters ({subReadings?.length || 0})
-            {subReadings?.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 bg-danger text-white text-xs font-bold rounded-full">
-                {subReadings.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('agent-report')}
-            className={`px-5 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'agent-report' ? 'text-primary border-primary' : 'text-muted border-transparent hover:text-white'}`}
-          >
-            <User size={18} />
-            Agent Report
-          </button>
-          <button
-            onClick={() => setActiveTab('generator-history')}
-            className={`px-5 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'generator-history' ? 'text-primary border-primary' : 'text-muted border-transparent hover:text-white'}`}
-          >
-            <History size={18} />
-            Generator History
-          </button>
-          <button
-            onClick={() => setActiveTab('subscriptions-history')}
-            className={`px-5 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'subscriptions-history' ? 'text-indigo-400 border-indigo-400' : 'text-muted border-transparent hover:text-white'}`}
-          >
-            <History size={18} className="text-indigo-400" />
-            Subscription History
-          </button>
-        </div>
-
-        {/* List */}
-        <div className="glass-card p-6 min-h-[60vh]">
-          {/* ── Electricity Tab ── */}
-          {activeTab === 'electricity' && (
-            loadingMeters ? <p className="text-muted">Loading...</p> :
-            meterReadings?.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted">
-                <CheckCircle size={48} className="mb-4 text-success/50" />
-                <p>All electricity readings verified.</p>
-              </div>
-            ) : (
-              <div className="grid gap-4">
-                {meterReadings?.map(r => (
-                  <div key={r.id} className="flex justify-between items-center p-4 bg-slate-800/50 rounded-xl border border-slate-700 hover:bg-slate-800 transition-colors cursor-pointer" onClick={() => setSelectedReading(r)}>
-                    <div>
-                      <h3 className="font-bold text-white">{r.building_name} - Apt {r.apartment_code}</h3>
-                      <p className="text-sm text-muted">Submitted by: {r.submitter_name || 'Unknown'} on {new Date(r.created_at).toLocaleString()}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xl font-black text-indigo-300">{r.consumption} kWh</p>
-                      <p className="text-xs text-muted">Total: {r.current_reading} kWh</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
-          )}
-
-          {/* ── Generator Tab ── */}
-          {activeTab === 'generator' && (
-            loadingGenerators ? <p className="text-muted">Loading...</p> :
-            generatorReadings?.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted">
-                <CheckCircle size={48} className="mb-4 text-success/50" />
-                <p>All generator readings verified.</p>
-              </div>
-            ) : (
-              <div className="grid gap-4">
-                {generatorReadings?.map(r => (
-                  <div key={r.id} className="flex justify-between items-center p-4 bg-slate-800/50 rounded-xl border border-slate-700 hover:bg-slate-800 transition-colors cursor-pointer" onClick={() => setSelectedReading(r)}>
-                    <div>
-                      <h3 className="font-bold text-white">{r.building_name} - {r.generator_name}</h3>
-                      <p className="text-sm text-muted">Submitted by: {r.submitter_name || 'Unknown'} on {new Date(r.created_at).toLocaleString()}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xl font-black text-indigo-300">+{r.kwh_produced} kWh</p>
-                      <p className="text-xs text-muted">Date: {new Date(r.date).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
-          )}
-
-          {/* ── Subscription Meters Tab ── */}
-          {activeTab === 'subscriptions' && (
-            loadingSubReadings ? <p className="text-muted">Loading...</p> :
-            subReadings?.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted">
-                <CheckCircle size={48} className="mb-4 text-success/50" />
-                <p>No pending subscription meter readings.</p>
-              </div>
-            ) : (
-              <div className="grid gap-4">
-                {subReadings?.map(r => (
-                  <div
-                    key={r.id}
-                    className="p-4 bg-slate-800/50 rounded-xl border border-indigo-500/30 hover:bg-slate-800 transition-colors cursor-pointer"
-                    onClick={() => setSelectedReading(r)}
-                  >
-                    {/* Breadcrumb */}
-                    <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-2">
-                      <Building2 size={12} className="text-indigo-400" />
-                      <span className="text-indigo-300 font-medium">{r.building_name}</span>
-                      <ChevronRight size={12} />
-                      <Home size={12} className="text-sky-400" />
-                      <span className="text-sky-300 font-medium">Apt {r.apartment_code}</span>
-                      <ChevronRight size={12} />
-                      <User size={12} className="text-emerald-400" />
-                      <span className="text-emerald-300 font-medium">{r.tenant_name || 'N/A'}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-sm text-muted">Submitted by: {r.submitter_name || 'Agent'} • {new Date(r.created_at).toLocaleString()}</p>
-                        <div className="flex gap-4 mt-1 text-sm">
-                          <span className="text-slate-400">Prev: <span className="text-white font-bold">{r.previous_reading} kWh</span></span>
-                          <span className="text-slate-400">New: <span className="text-primary font-bold">{r.current_reading} kWh</span></span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xl font-black text-indigo-300">+{parseFloat(r.consumption || 0).toFixed(0)} kWh</p>
-                        <p className="text-xs text-muted">Sub: {r.start_date} → {r.end_date}</p>
-                      </div>
-                    </div>
-                    {r.photo_path && (
-                      <a
-                        href={getFullImageUrl(r.photo_path)}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={e => e.stopPropagation()}
-                        className="mt-2 flex items-center gap-1 text-xs text-info hover:underline"
-                      >
-                        <Eye size={12} /> View meter photo
-                      </a>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )
-          )}
-
-          {/* ── Agent Report Tab ── */}
-          {activeTab === 'agent-report' && (
-            <div className="space-y-6">
-              <div className="p-4 flex flex-col md:flex-row gap-4 items-center justify-between border border-slate-700/50 bg-slate-800/20 rounded-xl">
-                <div className="flex items-center text-white font-medium">
-                  <Filter size={18} className="me-2 text-primary" /> Filter Report
-                </div>
-                <div className="flex flex-col md:flex-row gap-4 w-full md:w-auto">
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-400 text-sm font-medium">From:</span>
-                    <input
-                      type="date"
-                      value={reportStartDate}
-                      onChange={(e) => setReportStartDate(e.target.value)}
-                      className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-primary cursor-pointer"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-400 text-sm font-medium">To:</span>
-                    <input
-                      type="date"
-                      value={reportEndDate}
-                      onChange={(e) => setReportEndDate(e.target.value)}
-                      className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-primary cursor-pointer"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {loadingAgentReports ? (
-                <div className="text-muted py-8 text-center">Loading reports...</div>
-              ) : agentReports?.length === 0 ? (
-                <div className="text-muted py-8 text-center">No agents found.</div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {agentReports.map(report => (
-                    <div key={report.id} className="p-6 bg-slate-800/50 rounded-xl border border-slate-700 hover:bg-slate-800 transition-colors flex flex-col justify-between">
-                      <div className="flex items-center gap-4 mb-6">
-                        <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center text-primary shrink-0">
-                          <User size={24} />
-                        </div>
-                        <div>
-                          <h3 className="text-lg font-bold text-white">{report.name}</h3>
-                          <p className="text-sm text-slate-400">Agent Role</p>
-                        </div>
-                      </div>
-                      
-                      {report.tasks_count > 0 ? (
-                        <div className="bg-slate-900/50 rounded-xl p-4 mb-6 flex items-center justify-between border border-slate-700/50">
-                          <div>
-                            <p className="text-slate-400 text-sm">Readings Submitted</p>
-                            <p className="text-2xl font-bold text-white">{report.tasks_count}</p>
-                          </div>
-                          <CheckCircle className="text-success" size={28} />
-                        </div>
-                      ) : (
-                        <div className="bg-slate-900/50 rounded-xl p-4 mb-6 flex items-center justify-center border border-slate-700/50 text-center min-h-[88px]">
-                          <p className="text-slate-400 text-sm font-medium">This agent didn't do anything.</p>
-                        </div>
-                      )}
-                      
-                      <button 
-                        onClick={() => setSelectedAgentTasks(report)}
-                        disabled={report.tasks_count === 0}
-                        className={`w-full py-2 rounded-xl flex items-center justify-center font-medium transition-colors ${
-                          report.tasks_count === 0 
-                          ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                          : 'bg-primary text-white hover:bg-primary/90'
-                        }`}
-                      >
-                        {report.tasks_count === 0 ? 'No Tasks to View' : 'View Tasks'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── Generator History Tab ── */}
-          {activeTab === 'generator-history' && (
-            loadingGenHistory ? <p className="text-muted">Loading...</p> :
-            generatorHistory?.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted">
-                <p>No generator history found.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-start border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-700/50 bg-slate-800/30">
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">Date</th>
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">Building / Gen</th>
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">kWh Produced</th>
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-700/50">
-                    {generatorHistory.map(r => (
-                      <tr key={r.id} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="p-4 text-white font-medium">{new Date(r.date).toLocaleDateString()}</td>
-                        <td className="p-4 text-white">{r.building_name} - {r.generator_name}</td>
-                        <td className="p-4 text-indigo-300 font-bold">{r.kwh_produced} kWh</td>
-                        <td className="p-4">
-                          <span className={`px-2 py-1 rounded text-xs font-medium border ${r.status === 'Verified' ? 'bg-success/20 text-success border-success/30' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
-                            {r.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          )}
-
-          {/* ── Subscription History Tab ── */}
-          {activeTab === 'subscriptions-history' && (
-            loadingSubHistory ? <p className="text-muted">Loading...</p> :
-            subHistory?.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted">
-                <p>No subscription history found.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-start border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-700/50 bg-slate-800/30">
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">Date</th>
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">Location</th>
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">Consumption</th>
-                      <th className="p-4 text-sm font-semibold text-muted uppercase text-start">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-700/50">
-                    {subHistory.map(r => (
-                      <tr key={r.id} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="p-4 text-white font-medium">{new Date(r.created_at).toLocaleDateString()}</td>
-                        <td className="p-4 text-white">{r.building_name} - Apt {r.apartment_code}</td>
-                        <td className="p-4 text-indigo-300 font-bold">{r.consumption} kWh</td>
-                        <td className="p-4">
-                          <span className={`px-2 py-1 rounded text-xs font-medium border ${r.status === 'Accepted' ? 'bg-success/20 text-success border-success/30' : r.status === 'Rejected' ? 'bg-danger/20 text-danger border-danger/30' : 'bg-warning/20 text-warning border-warning/30'}`}>
-                            {r.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          )}
-        </div>
-      </div>
-
-      {/* ── Side Panel ── */}
-      {selectedReading && (
-        <div className="w-96 border-l border-slate-700 p-6 overflow-y-auto flex flex-col gap-6 bg-background">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-white">Review Reading</h2>
-            <button onClick={() => { setSelectedReading(null); setRejectionReason(''); }} className="text-muted hover:text-white text-2xl">×</button>
-          </div>
-
-          {/* Info */}
-          {activeTab === 'subscriptions' && (
-            <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-4 space-y-2 text-sm">
-              <div className="flex items-center gap-2 text-slate-300">
-                <Building2 size={14} className="text-indigo-400" /> <span className="font-medium">{selectedReading.building_name}</span>
-              </div>
-              <div className="flex items-center gap-2 text-slate-300">
-                <Home size={14} className="text-sky-400" /> <span>Apt {selectedReading.apartment_code}</span>
-              </div>
-              <div className="flex items-center gap-2 text-slate-300">
-                <User size={14} className="text-emerald-400" /> <span>{selectedReading.tenant_name || 'N/A'}</span>
-              </div>
-              <hr className="border-indigo-500/20" />
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div><p className="text-xs text-slate-500">Previous</p><p className="font-bold text-white">{selectedReading.previous_reading}</p></div>
-                <div><p className="text-xs text-slate-500">Current</p><p className="font-bold text-primary">{selectedReading.current_reading}</p></div>
-                <div><p className="text-xs text-slate-500">Consumed</p><p className="font-bold text-info">{parseFloat(selectedReading.consumption || 0).toFixed(0)}</p></div>
-              </div>
-              <p className="text-xs text-slate-400 text-center">kWh each</p>
-              <p className="text-xs text-amber-400 mt-2">⚡ Accepting will auto-renew this subscription by 1 month and save the meter reading.</p>
-            </div>
-          )}
-
-          {activeTab !== 'subscriptions' && (
-            <div className="bg-slate-800 rounded-xl p-4 space-y-3 text-sm">
-              {activeTab === 'electricity' && <>
-                <div className="flex justify-between"><span className="text-muted">Building / Apt:</span><span className="text-white font-medium">{selectedReading.building_name} - {selectedReading.apartment_code}</span></div>
-                <div className="flex justify-between"><span className="text-muted">Prev. Reading:</span><span className="text-white">{selectedReading.previous_reading} kWh</span></div>
-                <div className="flex justify-between"><span className="text-muted">New Reading:</span><span className="text-white font-bold">{selectedReading.current_reading} kWh</span></div>
-                <div className="flex justify-between"><span className="text-muted">Consumption:</span><span className="text-indigo-300 font-bold">{selectedReading.consumption} kWh</span></div>
-                <div className="flex justify-between"><span className="text-muted">Bill Amount:</span><span className="text-success font-bold">${selectedReading.bill_amount}</span></div>
-              </>}
-              {activeTab === 'generator' && <>
-                <div className="flex justify-between"><span className="text-muted">Building:</span><span className="text-white font-medium">{selectedReading.building_name}</span></div>
-                <div className="flex justify-between"><span className="text-muted">Generator:</span><span className="text-white">{selectedReading.generator_name}</span></div>
-                <div className="flex justify-between"><span className="text-muted">kWh Produced:</span><span className="text-indigo-300 font-bold">+{selectedReading.kwh_produced}</span></div>
-                <div className="flex justify-between"><span className="text-muted">Running Hours:</span><span className="text-white">{selectedReading.running_hours}h</span></div>
-                <div className="flex justify-between"><span className="text-muted">Notes:</span><span className="text-white">{selectedReading.notes || '—'}</span></div>
-              </>}
-            </div>
-          )}
-
-          {/* Photo */}
-          {selectedReading.photo_path && (
-            <div>
-              <p className="text-sm text-muted mb-2">Meter Photo</p>
-              <img src={getFullImageUrl(selectedReading.photo_path)} alt="Meter" className="w-full rounded-xl border border-slate-700 object-cover max-h-56" />
-            </div>
-          )}
-
-          {/* Notes if present */}
-          {selectedReading.notes && (
-            <div className="bg-slate-800/50 rounded-xl p-3">
-              <p className="text-xs text-slate-400 mb-1">Agent Notes</p>
-              <p className="text-sm text-white">{selectedReading.notes}</p>
-            </div>
-          )}
-
-          {/* Rejection reason */}
-          <div>
-            <label className="block text-sm text-muted mb-2">Rejection Reason (if rejecting)</label>
-            <textarea
-              rows={3}
-              value={rejectionReason}
-              onChange={e => setRejectionReason(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-danger resize-none"
-              placeholder="Explain why the reading is being rejected..."
-            />
-          </div>
-
-          {/* Actions */}
-          <div className="flex gap-3 mt-auto">
-            <button
-              onClick={() => handleVerify('Verified')}
-              className="flex-1 bg-success hover:bg-success/80 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-lg shadow-success/20"
-            >
-              <CheckCircle size={18} /> {activeTab === 'subscriptions' ? 'Accept & Renew' : 'Verify'}
+    <>
+      {/* Full-screen split layout */}
+      <div className="fixed inset-0 z-50 flex bg-slate-900/95 backdrop-blur-sm p-4 gap-0">
+        
+        {/* LEFT: Image Viewer */}
+        <div className="flex-1 bg-black rounded-l-2xl border border-r-0 border-slate-700 relative overflow-hidden flex flex-col items-center justify-center">
+          {/* Image controls */}
+          <div className="absolute top-4 left-4 z-10 flex gap-2">
+            <button className="bg-slate-800/80 p-2 rounded-lg text-white hover:bg-primary transition-colors" onClick={() => setImageZoom(z => Math.min(z + 0.25, 3))}>
+              <Maximize2 size={20}/>
             </button>
+            <button className="bg-slate-800/80 p-2 rounded-lg text-white hover:bg-primary transition-colors" onClick={() => setImageRotation(r => r + 90)}>
+              <RotateCw size={20}/>
+            </button>
+            <button className="bg-slate-800/80 p-2 rounded-lg text-white hover:bg-primary transition-colors" onClick={() => { setImageZoom(1); setImageRotation(0); }}>
+              <RefreshCw size={20}/>
+            </button>
+          </div>
+          {photoUrl ? (
+            <img
+              src={photoUrl}
+              alt="Meter"
+              className="max-h-full max-w-full object-contain"
+              style={{ transform: `scale(${imageZoom}) rotate(${imageRotation}deg)`, transition: 'transform 0.2s ease' }}
+            />
+          ) : (
+            <div className="text-slate-500 flex flex-col items-center">
+              <AlertCircle size={48} className="mb-4 opacity-50" />
+              <p>No meter photo uploaded.</p>
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT: Details & Actions */}
+        <div className="w-[480px] bg-slate-800 rounded-r-2xl border border-slate-700 flex flex-col max-h-full overflow-hidden shadow-2xl">
+
+          {/* Header */}
+          <div className="p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50 shrink-0">
+            <div>
+              <h2 className="text-xl font-bold text-white">Review Submission</h2>
+              <p className="text-sm text-slate-400">
+                {reviewItem.building_name} / Apt {reviewItem.apartment_code || reviewItem.generator_name}
+              </p>
+            </div>
             <button
-              onClick={() => handleVerify('Rejected')}
-              className="flex-1 bg-danger hover:bg-danger/80 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-lg shadow-danger/20"
+              onClick={onClose}
+              className="p-2 bg-slate-700 hover:bg-danger rounded-xl text-white transition-colors"
+            >
+              <X size={20}/>
+            </button>
+          </div>
+
+          {/* Scrollable body */}
+          <div className="flex-1 overflow-y-auto p-5 hide-scrollbar flex flex-col gap-5">
+
+            {/* Reading values / Quick Edit */}
+            {isQuickEdit ? (
+              <div className="bg-slate-900 p-4 rounded-xl border border-primary/50">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-primary flex items-center gap-2"><Settings size={18}/> Quick Edit Mode</h3>
+                  <button onClick={() => setIsQuickEdit(false)} className="text-xs text-slate-400 hover:text-white transition-colors">Cancel</button>
+                </div>
+                <div className="grid gap-4">
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">Current Reading</label>
+                    <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white font-mono focus:outline-none focus:border-primary"
+                      value={editValues.current_reading} onChange={e => setEditValues(v => ({...v, current_reading: e.target.value}))} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">Reading Date</label>
+                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-primary"
+                      value={editValues.reading_date} onChange={e => setEditValues(v => ({...v, reading_date: e.target.value}))} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">Correction Reason (sent to agent)</label>
+                    <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-primary"
+                      placeholder="e.g. Typo: 12500 instead of 12600"
+                      value={editValues.edit_reason || ''} onChange={e => setEditValues(v => ({...v, edit_reason: e.target.value}))} />
+                  </div>
+                  <button
+                    className="w-full py-3 bg-primary hover:bg-primary/80 text-white rounded-lg font-bold transition-colors flex justify-center items-center gap-2 disabled:opacity-50"
+                    onClick={() => editMutation.mutate({ id: reviewItem.id, payload: editValues })}
+                    disabled={editMutation.isPending}
+                  >
+                    {editMutation.isPending ? 'Saving...' : 'Save Correction'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-3 items-center">
+                <div className="flex-1 bg-slate-900 p-4 rounded-xl border border-slate-700 text-center">
+                  <span className="text-xs text-slate-400 block mb-1">Previous</span>
+                  <span className="font-mono text-xl text-slate-300">
+                    {reviewItem.previous_reading || reviewItem.previous_meter_hours || reviewItem.previous_kwh || '0.00'}
+                  </span>
+                </div>
+                <ChevronRight className="text-slate-600 shrink-0" />
+                <div
+                  className="flex-1 bg-slate-900 p-4 rounded-xl border border-primary/50 shadow-[0_0_15px_rgba(99,102,241,0.1)] text-center cursor-pointer hover:bg-slate-800 transition-colors"
+                  onClick={() => setIsQuickEdit(true)}
+                >
+                  <span className="text-xs text-primary block mb-1 flex justify-center items-center gap-1">Current <Settings size={12}/></span>
+                  <span className={`font-mono text-2xl font-bold ${reviewItem.corrected_reading ? 'text-green-400' : 'text-white'}`}>
+                    {reviewItem.corrected_reading || reviewItem.current_reading || reviewItem.current_meter_hours || reviewItem.meter_hours || reviewItem.current_kwh || reviewItem.running_hours || '0.00'}
+                  </span>
+                </div>
+                <ChevronRight className="text-slate-600 shrink-0" />
+                <div className="flex-1 bg-slate-900 p-4 rounded-xl border border-slate-700 text-center">
+                  <span className="text-xs text-indigo-400 block mb-1">Consumed</span>
+                  <span className="font-mono text-xl text-indigo-300 font-bold">
+                    +{reviewItem.consumption || reviewItem.running_hours || reviewItem.kwh_produced || 0}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Anomaly Warnings */}
+            {warnings.length > 0 && (
+              <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700">
+                <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                  <AlertTriangle size={16} className="text-orange-500" /> Detected Anomalies ({warnings.length})
+                </h3>
+                <div className="flex flex-col gap-2">
+                  {warnings.map((w, i) => <AnomalyBadge key={i} warning={w} />)}
+                </div>
+              </div>
+            )}
+
+            {/* Stats */}
+            {!loadingDetails && (d.avg_3m !== undefined || d.building_avg !== undefined) && (
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                  <div className="text-slate-400 text-xs">{activeTab === 'generator' ? 'Average Run Time' : '3-Month Avg'}</div>
+                  <div className="font-mono text-white mt-1">{d.avg_3m ?? '—'} {d.unit || (activeTab === 'generator' ? 'hrs/day' : 'kWh')}</div>
+                </div>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                  <div className="text-slate-400 text-xs">{activeTab === 'generator' ? 'Factory Burn Rate' : 'Building Avg'}</div>
+                  <div className="font-mono text-white mt-1">{d.building_avg ?? '—'} {d.secondary_unit || (activeTab === 'generator' ? 'L/h' : 'kWh')}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Generator Operational Diagnostics */}
+            {activeTab === 'generator' && (d.expected_burn !== undefined || d.fuel_remaining !== undefined) && (
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                  <div className="text-slate-400 text-xs">Expected Fuel Burn</div>
+                  <div className="font-mono text-amber-400 mt-1 font-bold">~{d.expected_burn ?? '—'} L</div>
+                </div>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                  <div className="text-slate-400 text-xs">Fuel Remaining in Tank</div>
+                  <div className="font-mono text-green-400 mt-1 font-bold">{d.fuel_remaining ?? '—'} L</div>
+                </div>
+              </div>
+            )}
+
+            {/* History */}
+            {reviewDetails?.history?.length > 0 && (
+              <div className="border border-slate-700 rounded-xl overflow-hidden bg-slate-900">
+                <div className="bg-slate-800 p-2 text-xs font-bold text-white text-center border-b border-slate-700">
+                  {activeTab === 'generator' ? 'Previous Operations' : 'Last 5 Readings'}
+                </div>
+                <table className="w-full text-sm text-left">
+                  <tbody>
+                    {reviewDetails.history.slice(0, 5).map((h, i) => (
+                      <tr key={i} className="border-b border-slate-800 last:border-0">
+                        <td className="p-2 text-slate-400">{h.month_label || h.reading_date}</td>
+                        <td className="p-2 font-mono text-slate-300">{h.current_reading} {activeTab === 'generator' ? 'hrs' : ''}</td>
+                        <td className="p-2 font-mono text-indigo-400 text-right">+{h.consumption} {activeTab === 'generator' ? 'h' : ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Timeline */}
+            {timeline?.length > 0 && (
+              <div className="border-l-2 border-slate-700 ml-3 pl-4 py-2 space-y-4">
+                {timeline.map((evt, i) => (
+                  <div key={i} className="relative">
+                    <div className="absolute -left-[23px] top-1 w-3 h-3 bg-slate-700 rounded-full border-2 border-slate-900" />
+                    <div className="text-xs text-slate-400 mb-0.5">{new Date(evt.created_at).toLocaleString()}</div>
+                    <div className="text-sm text-white font-medium capitalize">{evt.action} <span className="text-slate-400 font-normal">by {evt.user_display_name}</span></div>
+                    {evt.reason && <div className="text-xs text-slate-400 italic mt-0.5">"{evt.reason}"</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+          </div>
+
+          {/* Footer Action Buttons */}
+          <div className="p-4 border-t border-slate-700 bg-slate-900 flex gap-3 shrink-0">
+            <button
+              className="flex-1 py-3 bg-slate-700 hover:bg-danger text-white rounded-xl font-bold transition-colors flex justify-center items-center gap-2 disabled:opacity-50"
+              onClick={() => setIsRejectOpen(true)}
+              disabled={approveMutation.isPending || rejectMutation.isPending}
             >
               <XCircle size={18} /> Reject
             </button>
+            <button
+              className="flex-[2] py-3 bg-success hover:bg-success/80 text-white rounded-xl font-bold transition-colors flex justify-center items-center gap-2 shadow-[0_0_20px_rgba(34,197,94,0.3)] disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => approveMutation.mutate(reviewItem.id)}
+              disabled={approveMutation.isPending || rejectMutation.isPending}
+            >
+              {approveMutation.isPending
+                ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Approving...</>
+                : <><CheckCircle size={18} /> Approve &amp; Generate</>
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Reject Modal */}
+      {isRejectOpen && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4" onClick={e => e.target === e.currentTarget && setIsRejectOpen(false)}>
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
+            <div className="p-5 border-b border-slate-700 flex justify-between items-center bg-slate-900">
+              <h3 className="font-bold text-white text-lg">Reject Submission</h3>
+              <button onClick={() => setIsRejectOpen(false)} className="text-slate-400 hover:text-white transition-colors p-1"><X size={20}/></button>
+            </div>
+            <div className="p-6 flex flex-col gap-5">
+              <div>
+                <label className="text-sm font-bold text-slate-300 block mb-2">Rejection Reason</label>
+                <select className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-primary" value={rejectReason} onChange={e => setRejectReason(e.target.value)}>
+                  <option value="image_blurry">Image is too blurry</option>
+                  <option value="missing_image">Missing meter photo</option>
+                  <option value="incorrect_reading">Incorrect reading value</option>
+                  <option value="wrong_meter">Wrong meter photographed</option>
+                  <option value="wrong_apartment">Wrong apartment</option>
+                  <option value="fraud_suspected">Fraud suspected</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-bold text-slate-300 block mb-2">Severity (Risk Record)</label>
+                <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-700">
+                  {['minor', 'medium', 'major', 'critical'].map(s => (
+                    <button key={s} onClick={() => setRejectSeverity(s)}
+                      className={`flex-1 text-xs py-2 rounded-md capitalize font-bold transition-colors ${rejectSeverity === s ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-bold text-slate-300 block mb-2">Additional Comment (sent to agent)</label>
+                <textarea className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white min-h-[100px] resize-none focus:outline-none focus:border-primary"
+                  placeholder="Explain what the agent needs to do..."
+                  value={rejectComment} onChange={e => setRejectComment(e.target.value)} />
+              </div>
+              <button
+                className="w-full py-3 bg-danger hover:bg-red-600 text-white rounded-xl font-bold transition-colors mt-2 flex justify-center items-center gap-2 disabled:opacity-50"
+                onClick={() => rejectMutation.mutate({ id: reviewItem.id, payload: { reason_code: rejectReason, severity: rejectSeverity, comment: rejectComment } })}
+                disabled={rejectMutation.isPending}
+              >
+                {rejectMutation.isPending
+                  ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Rejecting...</>
+                  : 'Confirm Rejection'
+                }
+              </button>
+            </div>
           </div>
         </div>
       )}
+    </>
+  );
+});
 
-      {/* ── Agent Tasks Modal ── */}
-      {selectedAgentTasks && (
-        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="flex justify-between items-center p-6 border-b border-slate-700/50">
-              <div>
-                <h2 className="text-xl font-bold text-white">Readings by {selectedAgentTasks.name}</h2>
-                <p className="text-muted text-sm">Period: {reportStartDate} to {reportEndDate}</p>
-              </div>
-              <button onClick={() => setSelectedAgentTasks(null)} className="text-slate-400 hover:text-white transition-colors">
-                <X size={24} />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto hide-scrollbar flex-1 space-y-4">
-              {selectedAgentTasks.tasks.map(task => (
-                <div key={task.id + task.task_type} className="bg-slate-800/30 border border-slate-700/50 rounded-xl flex flex-col hover:border-slate-600 transition-colors">
-                  <div className="p-4 flex flex-col md:flex-row gap-4 justify-between items-center">
-                    <div>
-                      <h4 className="text-white font-bold mb-1">{task.task_type}</h4>
-                      <p className="text-slate-400 text-sm">{task.location_info}</p>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-sm text-slate-500">
-                        Submitted: {new Date(task.submission_date).toLocaleString()}
-                      </div>
-                      <button
-                        onClick={() => setExpandedTaskId(expandedTaskId === task.id + task.task_type ? null : task.id + task.task_type)}
-                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
-                      >
-                        <Eye size={16} />
-                        {expandedTaskId === task.id + task.task_type ? 'Hide' : 'View'}
-                      </button>
-                    </div>
-                  </div>
-                  
-                  {expandedTaskId === task.id + task.task_type && (
-                    <div className="p-4 border-t border-slate-700/50 bg-slate-900/50">
-                      {task.task_type === 'Electricity Meter Reading' && (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                          <div><span className="text-muted block">Previous</span><span className="text-white">{task.previous_reading} kWh</span></div>
-                          <div><span className="text-muted block">Current</span><span className="text-primary font-bold">{task.current_reading} kWh</span></div>
-                          <div><span className="text-muted block">Consumption</span><span className="text-indigo-300 font-bold">{task.consumption} kWh</span></div>
-                          <div><span className="text-muted block">Bill Amount</span><span className="text-success font-bold">${task.bill_amount}</span></div>
-                          {task.notes && <div className="col-span-2 md:col-span-4"><span className="text-muted block">Notes</span><span className="text-white">{task.notes}</span></div>}
-                          {task.photo_path && (
-                            <div className="col-span-2 md:col-span-4 mt-2">
-                              <a href={getFullImageUrl(task.photo_path)} target="_blank" rel="noreferrer" className="text-info hover:underline flex items-center gap-1">
-                                <Eye size={12} /> View Photo
-                              </a>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {task.task_type === 'Generator Reading' && (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                          <div><span className="text-muted block">Previous</span><span className="text-white">{task.previous_kwh} kWh</span></div>
-                          <div><span className="text-muted block">Current</span><span className="text-primary font-bold">{task.current_kwh} kWh</span></div>
-                          <div><span className="text-muted block">Produced</span><span className="text-indigo-300 font-bold">+{task.kwh_produced} kWh</span></div>
-                          <div><span className="text-muted block">Running Hours</span><span className="text-white font-bold">{task.running_hours} h</span></div>
-                          {task.notes && <div className="col-span-2 md:col-span-4"><span className="text-muted block">Notes</span><span className="text-white">{task.notes}</span></div>}
-                          {task.photo_meter_path && (
-                            <div className="col-span-2 md:col-span-4 mt-2">
-                              <a href={getFullImageUrl(task.photo_meter_path)} target="_blank" rel="noreferrer" className="text-info hover:underline flex items-center gap-1">
-                                <Eye size={12} /> View Meter Photo
-                              </a>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {task.task_type === 'Subscription Meter Reading' && (
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-                          <div><span className="text-muted block">Previous</span><span className="text-white">{task.previous_reading} kWh</span></div>
-                          <div><span className="text-muted block">Current</span><span className="text-primary font-bold">{task.current_reading} kWh</span></div>
-                          <div><span className="text-muted block">Consumption</span><span className="text-info font-bold">{parseFloat(task.consumption || 0).toFixed(0)} kWh</span></div>
-                          {task.notes && <div className="col-span-2 md:col-span-3"><span className="text-muted block">Notes</span><span className="text-white">{task.notes}</span></div>}
-                          {task.photo_path && (
-                            <div className="col-span-2 md:col-span-3 mt-2">
-                              <a href={getFullImageUrl(task.photo_path)} target="_blank" rel="noreferrer" className="text-info hover:underline flex items-center gap-1">
-                                <Eye size={12} /> View Photo
-                              </a>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+// ─── Queue Card (memoized) ───────────────────────────────────────────────────
+
+const QueueCard = memo(({ item, isSelected, onSelect, onOpen }) => {
+  const score = item.confidence_score ?? 100;
+  const flags = Array.isArray(item.anomaly_flags) ? item.anomaly_flags : [];
+  return (
+    <div
+      className={`bg-slate-800 rounded-xl border-2 transition-all cursor-pointer hover:border-slate-500 ${isSelected ? 'border-primary' : 'border-slate-700/50'}`}
+      onClick={(e) => { if (e.target.type !== 'checkbox') onOpen(item); }}
+    >
+      <div className="p-4 border-b border-slate-700/50 flex justify-between items-start">
+        <div className="flex gap-3">
+          <input type="checkbox" checked={isSelected} onChange={() => onSelect(item.id)}
+            className="mt-1 w-5 h-5 rounded bg-slate-900 border-slate-600 text-primary cursor-pointer"
+            onClick={e => e.stopPropagation()} />
+          <div>
+            <h3 className="font-bold text-white">{item.building_name} - Apt {item.apartment_code || item.generator_name}</h3>
+            <div className="text-sm text-slate-400 mt-0.5">
+              Submitted by {item.submitter_name} on {new Date(item.submitted_at || item.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
             </div>
           </div>
         </div>
+        <div className={`px-2 py-1 rounded text-xs font-bold shrink-0 ${
+          item.risk_level === 'critical' ? 'bg-red-500/20 text-red-400' :
+          item.risk_level === 'high' ? 'bg-orange-500/20 text-orange-400' :
+          item.risk_level === 'medium' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
+        }`}>
+          {item.risk_level?.toUpperCase() || 'SAFE'}
+        </div>
+      </div>
+      <div className="p-4 flex flex-col gap-3">
+        <div className="flex justify-between items-center text-sm">
+          <span className="text-slate-400">Reading</span>
+          <span className="font-mono text-lg text-white font-bold">
+            {item.current_reading || item.current_meter_hours || item.meter_hours || item.current_kwh || item.running_hours || '0.00'}
+          </span>
+        </div>
+        {item.consumption !== undefined && (
+          <div className="flex justify-between items-center text-sm">
+            <span className="text-slate-400">Consumption</span>
+            <span className="font-mono text-lg text-indigo-300 font-bold">+{item.consumption}</span>
+          </div>
+        )}
+        <ConfidenceBar score={score} riskLevel={item.risk_level || 'low'} />
+        {flags.length > 0 && (
+          <div className="flex gap-1 flex-wrap mt-1">
+            {flags.map((f, i) => (
+              <span key={i} title={f.message} className="text-xs px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded border border-slate-600">{f.title}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+
+const ReadingsVerification = () => {
+  const queryClient = useQueryClient();
+
+  const [activeTab, setActiveTab] = useState('electricity');
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [reviewItem, setReviewItem] = useState(null);
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [riskFilter, setRiskFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('');
+  const [viewMode, setViewMode] = useState('pending');
+
+  // ── Queries (no aggressive refetch while panel is open) ──────────────────
+  const { data: queue = [], isLoading: loadingQueue } = useQuery({
+    queryKey: ['approvalQueue', activeTab, viewMode],
+    queryFn: async () => {
+      if (!['electricity', 'generator', 'subscriptions'].includes(activeTab)) return [];
+      const res = await api.get(`/approval/queue/${apiType(activeTab)}?status=${viewMode}`);
+      return res.data;
+    },
+    refetchInterval: reviewItem ? false : 15000,
+    staleTime: 5000,
+  });
+
+  const { data: adminKpi } = useQuery({
+    queryKey: ['adminKpi'],
+    queryFn: async () => (await api.get('/approval/admin-kpi')).data,
+    refetchInterval: 15000, // Frequent refetch for live notification counts
+    staleTime: 5000,
+  });
+
+  const { data: leaderboard } = useQuery({
+    queryKey: ['agentLeaderboard'],
+    queryFn: async () => (await api.get('/approval/agent-leaderboard')).data,
+    enabled: activeTab === 'admin-kpi',
+    staleTime: 60000,
+  });
+
+  const { data: healthScores } = useQuery({
+    queryKey: ['buildingHealth'],
+    queryFn: async () => (await api.get('/approval/building-health')).data,
+    enabled: activeTab === 'admin-kpi',
+    staleTime: 60000,
+  });
+
+  const { data: settings } = useQuery({
+    queryKey: ['approvalSettings'],
+    queryFn: async () => (await api.get('/approval/settings')).data,
+    enabled: activeTab === 'settings',
+    staleTime: 60000,
+  });
+
+  // ── Bulk Approve Mutation ────────────────────────────────────────────────
+  const bulkApproveMutation = useMutation({
+    mutationFn: (payload) => api.post(`/approval/bulk-approve/${apiType(activeTab)}`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approvalQueue'] });
+      setSelectedIds([]);
+    },
+    onError: (err) => alert(err?.response?.data?.error || 'Bulk approve failed.')
+  });
+
+  // ── Stable Handlers (useCallback prevents child re-renders) ─────────────
+  const toggleSelect = useCallback((id) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds(prev => prev.length === queue.length ? [] : queue.map(x => x.id));
+  }, [queue]);
+
+  const openReview = useCallback((item) => {
+    setReviewItem(item);
+  }, []);
+
+  const closeReview = useCallback(() => {
+    setReviewItem(null);
+  }, []);
+
+  const handleBulkApprove = useCallback((safeOnly) => {
+    if (!safeOnly && !window.confirm('You are about to approve readings that may have high risk anomalies. Proceed?')) return;
+    bulkApproveMutation.mutate({ ids: selectedIds, skip_high_risk: safeOnly });
+  }, [selectedIds, bulkApproveMutation]);
+
+  const getFullImageUrl = useCallback((path) => {
+    if (!path) return null;
+    return api.defaults.baseURL.replace(/\/backend\/api$/, '').replace(/\/api$/, '') + '/' + path;
+  }, []);
+
+  // ── Render Queue ─────────────────────────────────────────────────────────
+  const renderQueue = () => {
+    if (loadingQueue) return (
+      <div className="flex items-center justify-center p-16">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          <p className="text-slate-400">Loading queue...</p>
+        </div>
+      </div>
+    );
+    const renderEmptyState = () => {
+      const getEmptyMessage = () => {
+        if (viewMode === 'approved') return { title: 'No approved readings.', sub: 'You haven\'t approved any readings yet.' };
+        if (viewMode === 'rejected') return { title: 'No rejected readings.', sub: 'You haven\'t rejected any readings yet.' };
+        return { title: 'Queue is empty.', sub: 'All caught up! 🎉' };
+      };
+      const msg = getEmptyMessage();
+      
+      return (
+        <div className="p-16 text-center">
+          <CheckCircle size={48} className="mx-auto text-success/40 mb-4" />
+          <p className="text-slate-300 text-lg font-semibold">{msg.title}</p>
+          <p className="text-slate-500 mt-1">{msg.sub}</p>
+        </div>
+      );
+    };
+
+    const filteredQueue = queue.filter(item => {
+      const matchSearch = !searchQuery || (
+        (item.building_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (item.apartment_code || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (item.generator_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (item.submitter_name || '').toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      const risk = item.risk_level || 'low';
+      const matchRisk = riskFilter === 'all' || risk === riskFilter;
+      const itemDate = (item.submitted_at || item.created_at || '').split('T')[0].split(' ')[0];
+      const matchDate = !dateFilter || itemDate === dateFilter;
+      return matchSearch && matchRisk && matchDate;
+    });
+
+    return (
+      <>
+        {/* Search & Filter Toolbar */}
+        <div className="flex flex-col xl:flex-row gap-4 mb-6 xl:items-center">
+          
+          {/* Status Toggle */}
+          <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700 shrink-0">
+            <button 
+              className={`px-4 py-1.5 rounded-md text-sm font-bold transition-colors ${viewMode === 'pending' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+              onClick={() => { setViewMode('pending'); setSelectedIds([]); }}
+            >
+              Pending
+            </button>
+            <button 
+              className={`px-4 py-1.5 rounded-md text-sm font-bold transition-colors ${viewMode === 'approved' ? 'bg-success text-white' : 'text-slate-400 hover:text-white'}`}
+              onClick={() => { setViewMode('approved'); setSelectedIds([]); }}
+            >
+              Approved
+            </button>
+            <button 
+              className={`px-4 py-1.5 rounded-md text-sm font-bold transition-colors ${viewMode === 'rejected' ? 'bg-danger text-white' : 'text-slate-400 hover:text-white'}`}
+              onClick={() => { setViewMode('rejected'); setSelectedIds([]); }}
+            >
+              Rejected
+            </button>
+          </div>
+
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input 
+              type="text" 
+              placeholder="Search building, apartment, agent..." 
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-4 py-2 text-white focus:outline-none focus:border-primary transition-colors"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+          </div>
+
+          <div className="relative shrink-0">
+            <input 
+              type="date"
+              className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-slate-300 focus:outline-none focus:border-primary transition-colors"
+              value={dateFilter}
+              onChange={e => setDateFilter(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-2 xl:pb-0">
+            <Filter size={18} className="text-slate-400 shrink-0" />
+            {['all', 'low', 'medium', 'high', 'critical'].map(risk => (
+              <button 
+                key={risk}
+                onClick={() => setRiskFilter(risk)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-bold capitalize whitespace-nowrap transition-colors ${
+                  riskFilter === risk 
+                    ? (risk === 'critical' ? 'bg-red-500/20 text-red-400 border border-red-500/50' : 
+                       risk === 'high' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/50' : 
+                       risk === 'medium' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 
+                       risk === 'low' ? 'bg-green-500/20 text-green-400 border border-green-500/50' : 
+                       'bg-primary/20 text-primary border border-primary/50')
+                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                }`}
+              >
+                {risk}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {filteredQueue.length === 0 ? (
+          <div className="p-16 text-center bg-slate-800/30 rounded-xl border border-slate-700/50 border-dashed">
+            <p className="text-slate-400 text-lg">No readings match your search/filter.</p>
+            <button onClick={() => { setSearchQuery(''); setRiskFilter('all'); }} className="text-primary mt-2 hover:underline">Clear Filters</button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filteredQueue.map(item => (
+              <QueueCard
+                key={item.id}
+                item={item}
+                isSelected={selectedIds.includes(item.id)}
+                onSelect={toggleSelect}
+                onOpen={openReview}
+              />
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // ── Render KPI Dashboard ─────────────────────────────────────────────────
+  const renderAdminKPI = () => {
+    if (!adminKpi) return <div className="p-8 text-center text-slate-400">Loading Dashboards...</div>;
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {[
+            { label: 'Pending Approvals', value: adminKpi.pending_approvals, color: 'text-white' },
+            { label: '🔴 High Risk', value: adminKpi.high_risk, color: 'text-orange-400' },
+            { label: '✅ Bulk-Safe', value: adminKpi.bulk_safe, color: 'text-green-400' },
+            { label: 'Rejection Rate', value: adminKpi.rejection_rate, color: 'text-slate-300' },
+            { label: 'Revenue Waiting', value: `$${adminKpi.revenue_waiting?.toLocaleString() ?? 0}`, color: 'text-indigo-400' },
+            { label: 'Over 48h Pending', value: adminKpi.pending_over_48h, color: 'text-red-400', alert: true },
+          ].map((kpi, i) => (
+            <div key={i} className={`bg-slate-800 p-5 rounded-xl border ${kpi.alert ? 'border-danger/30' : 'border-slate-700'} relative overflow-hidden`}>
+              {kpi.alert && <div className="absolute top-0 right-0 bg-danger text-white text-[10px] font-bold px-2 py-0.5 rounded-bl-lg">ALERT</div>}
+              <div className="text-sm text-slate-400">{kpi.label}</div>
+              <div className={`text-3xl font-bold mt-2 ${kpi.color}`}>{kpi.value}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {/* Leaderboard */}
+          <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+            <div className="p-4 border-b border-slate-700 bg-slate-900">
+              <h3 className="font-bold text-white flex items-center gap-2"><User size={18} className="text-primary"/> Agent Performance</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-800/50 text-slate-400">
+                  <tr><th className="p-3">Rank</th><th className="p-3">Agent</th><th className="p-3 text-right">Score</th><th className="p-3 text-right">Approved</th><th className="p-3 text-right">Rejected</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700">
+                  {leaderboard?.map((agent, i) => (
+                    <tr key={i} className="hover:bg-slate-700/50">
+                      <td className="p-3 font-bold text-white">{i+1}</td>
+                      <td className="p-3 text-slate-200">{agent.agent_name}</td>
+                      <td className="p-3 text-right font-mono text-green-400">{agent.accuracy_score}%</td>
+                      <td className="p-3 text-right">{agent.approved_count}</td>
+                      <td className="p-3 text-right text-red-400">{agent.rejected_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {/* Building Health */}
+          <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+            <div className="p-4 border-b border-slate-700 bg-slate-900">
+              <h3 className="font-bold text-white flex items-center gap-2"><Building2 size={18} className="text-primary"/> Building Health</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-800/50 text-slate-400">
+                  <tr><th className="p-3">Building</th><th className="p-3">Grade</th><th className="p-3">Score</th><th className="p-3 text-right">Missing</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700">
+                  {healthScores?.map((b, i) => {
+                    let details = {};
+                    try { details = JSON.parse(b.details || '{}'); } catch {}
+                    return (
+                      <tr key={i} className="hover:bg-slate-700/50">
+                        <td className="p-3 font-medium text-white">{b.building_name}</td>
+                        <td className="p-3">
+                          <span className={`px-2 py-1 rounded text-xs font-bold ${
+                            b.grade === 'Excellent' ? 'bg-green-500/20 text-green-400' :
+                            b.grade === 'Good' ? 'bg-blue-500/20 text-blue-400' :
+                            b.grade === 'Critical' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'
+                          }`}>{b.grade}</span>
+                        </td>
+                        <td className="p-3 font-mono text-slate-300">{b.score}</td>
+                        <td className="p-3 text-right text-slate-400">{details.missing_pct || 0}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Activity Feed */}
+        <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-700 bg-slate-900">
+            <h3 className="font-bold text-white flex items-center gap-2"><History size={18} className="text-primary"/> Recent Admin Activity</h3>
+          </div>
+          <div className="p-4 flex flex-col gap-3">
+            {adminKpi.recent_activity?.map((act, i) => (
+              <div key={i} className="flex gap-4 items-start text-sm border-b border-slate-700/50 pb-3 last:border-0 last:pb-0">
+                <div className="text-slate-400 w-24 shrink-0 mt-0.5">{new Date(act.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                <div>
+                  <span className="font-bold text-white">{act.user_display_name}</span>{' '}
+                  <span className="text-slate-300">{act.action}</span>{' '}
+                  <span className="text-primary">[{act.module} - {act.record_id}]</span>
+                  {act.reason && <div className="text-xs text-slate-400 mt-1 italic">"{act.reason}"</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Render Settings ──────────────────────────────────────────────────────
+  const renderSettings = () => (
+    <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden max-w-4xl mx-auto">
+      <div className="p-5 border-b border-slate-700 bg-slate-900">
+        <h3 className="font-bold text-white text-lg flex items-center gap-2"><Settings className="text-primary"/> Approval Engine Thresholds</h3>
+        <p className="text-sm text-slate-400 mt-1">Changes apply instantly to all new analysis requests.</p>
+      </div>
+      <table className="w-full text-left text-sm">
+        <tbody className="divide-y divide-slate-700">
+          {settings?.map((s, i) => (
+            <tr key={i} className="hover:bg-slate-700/30">
+              <td className="p-5">
+                <div className="font-bold text-white text-base">{s.label}</div>
+                <div className="text-slate-400 mt-1">{s.description}</div>
+              </td>
+              <td className="p-5 w-48 align-top">
+                <input
+                  type={s.data_type === 'boolean' ? 'text' : 'number'}
+                  defaultValue={s.setting_value}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white font-mono focus:outline-none focus:border-primary"
+                  onBlur={e => {
+                    if (e.target.value !== s.setting_value) {
+                      api.put(`/approval/settings/${s.setting_key}`, { value: e.target.value })
+                        .then(() => queryClient.invalidateQueries({ queryKey: ['approvalSettings'] }));
+                    }
+                  }}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  // ── Main Render ──────────────────────────────────────────────────────────
+  return (
+    <div className="flex h-full w-full overflow-hidden bg-background">
+      <div className="flex-1 overflow-y-auto p-4 md:p-8 hide-scrollbar">
+
+        {/* Page Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-white mb-1">Enterprise Verification</h1>
+          <p className="text-slate-400">Smart anomaly detection and bulk approval workflows.</p>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6 border-b border-slate-700 flex-wrap">
+          {['electricity', 'generator', 'subscriptions'].map(tab => {
+            const pendingCount = adminKpi?.[`${tab === 'subscriptions' ? 'subscription' : tab}_pending`] || 0;
+            return (
+              <button key={tab}
+                onClick={() => { setActiveTab(tab); setSelectedIds([]); setSearchQuery(''); setRiskFilter('all'); setViewMode('pending'); setDateFilter(''); }}
+                className={`px-4 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px capitalize ${activeTab === tab ? 'text-primary border-primary' : 'text-slate-400 border-transparent hover:text-white'}`}>
+                <CheckSquare size={16} /> {tab} 
+                {pendingCount > 0 && (
+                  <span className="bg-danger text-white rounded-full px-2 py-0.5 text-xs font-bold shadow-sm border border-danger/50 shadow-danger/20">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <div className="w-px h-8 bg-slate-700 self-center mx-2" />
+          <button onClick={() => setActiveTab('admin-kpi')}
+            className={`px-4 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'admin-kpi' ? 'text-indigo-400 border-indigo-400' : 'text-slate-400 border-transparent hover:text-white'}`}>
+            <BarChart2 size={16} /> KPI Dashboard
+          </button>
+          <button onClick={() => setActiveTab('settings')}
+            className={`px-4 py-3 font-medium transition-colors flex items-center gap-2 border-b-2 -mb-px ${activeTab === 'settings' ? 'text-slate-300 border-slate-300' : 'text-slate-400 border-transparent hover:text-white'}`}>
+            <Settings size={16} /> Settings
+          </button>
+        </div>
+
+        {/* Bulk Toolbar */}
+        {selectedIds.length > 0 && ['electricity', 'generator', 'subscriptions'].includes(activeTab) && (
+          <div className="sticky top-0 z-40 bg-indigo-900/90 backdrop-blur border border-indigo-500 rounded-xl p-3 mb-6 flex justify-between items-center shadow-[0_10px_30px_rgba(99,102,241,0.2)]">
+            <div className="flex items-center gap-4 text-white">
+              <div className="font-bold bg-indigo-800 px-3 py-1 rounded-lg">{selectedIds.length} Selected</div>
+              <button className="text-sm text-indigo-300 hover:text-white underline" onClick={toggleSelectAll}>Select All</button>
+            </div>
+            <div className="flex gap-2">
+              <button className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-bold border border-slate-600 transition-colors" onClick={() => setSelectedIds([])}>Cancel</button>
+              <button className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+                onClick={() => handleBulkApprove(true)} disabled={bulkApproveMutation.isPending}>
+                <Check size={16}/> Approve Safe Only
+              </button>
+              <button className="px-4 py-2 bg-success hover:bg-success/80 text-white rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-[0_0_15px_rgba(34,197,94,0.4)] disabled:opacity-50"
+                onClick={() => handleBulkApprove(false)} disabled={bulkApproveMutation.isPending}>
+                <CheckCircle size={16}/> Force Approve All
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Content */}
+        {['electricity', 'generator', 'subscriptions'].includes(activeTab) && renderQueue()}
+        {activeTab === 'admin-kpi' && renderAdminKPI()}
+        {activeTab === 'settings' && renderSettings()}
+      </div>
+
+      {/* Review Panel (only mounted when item selected) */}
+      {reviewItem && (
+        <ReviewPanel
+          key={reviewItem.id}
+          reviewItem={reviewItem}
+          onClose={closeReview}
+          activeTab={activeTab}
+          getFullImageUrl={getFullImageUrl}
+        />
       )}
     </div>
   );

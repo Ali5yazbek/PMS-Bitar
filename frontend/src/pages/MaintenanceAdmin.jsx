@@ -15,7 +15,11 @@ const MaintenanceAdmin = () => {
   const [selectedTask, setSelectedTask] = useState(null);
   const [historyStatusFilter, setHistoryStatusFilter] = useState('All');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
-  const [reportStartDate, setReportStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [reportStartDate, setReportStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(1);
+    return d.toISOString().split('T')[0];
+  });
   const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedWorkerTasks, setSelectedWorkerTasks] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
@@ -60,6 +64,22 @@ const MaintenanceAdmin = () => {
     refetchInterval: 10000 // Auto-refresh every 10 seconds
   });
 
+  const { data: tenantRequests, isLoading: loadingTenantRequests } = useQuery({
+    queryKey: ['adminTenantRequests'],
+    queryFn: async () => {
+      const res = await axios.get('/maintenance-tickets/all');
+      return res.data;
+    },
+    refetchInterval: 10000
+  });
+
+  const updateTicketStatusMutation = useMutation({
+    mutationFn: ({ ticketId, data }) => axios.put(`/maintenance-tickets/${ticketId}/status`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['adminTenantRequests']);
+    }
+  });
+
   const { data: buildings, isLoading: loadingBuildings } = useQuery({
     queryKey: ['buildings'],
     queryFn: async () => {
@@ -95,6 +115,7 @@ const MaintenanceAdmin = () => {
     onSuccess: () => {
       queryClient.invalidateQueries(['adminPendingTasks']);
       queryClient.invalidateQueries(['adminHistoryTasks']);
+      queryClient.invalidateQueries(['expiringItems']);
       setSelectedTask(null);
     }
   });
@@ -106,6 +127,7 @@ const MaintenanceAdmin = () => {
     onSuccess: () => {
       queryClient.invalidateQueries(['adminPendingTasks']);
       queryClient.invalidateQueries(['adminHistoryTasks']);
+      queryClient.invalidateQueries(['expiringItems']);
       setSelectedTask(null);
     }
   });
@@ -150,8 +172,8 @@ const MaintenanceAdmin = () => {
 
   const filteredPendingTasks = Array.isArray(pendingTasks) ? pendingTasks.filter(task => {
     if (!searchTerm) return true;
-    return task.apartment_code?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-           task.building_name?.toLowerCase().includes(searchTerm.toLowerCase());
+    const searchStr = `${task.building_name || ''} ${task.apartment_code || ''} ${task.worker_name || ''}`.toLowerCase();
+    return searchStr.includes(searchTerm.toLowerCase());
   }) : [];
 
   const filteredHistoryTasks = Array.isArray(historyTasks) ? historyTasks.filter(task => {
@@ -164,8 +186,8 @@ const MaintenanceAdmin = () => {
     }
     let searchMatch = true;
     if (searchTerm) {
-      searchMatch = task.apartment_code?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                    task.building_name?.toLowerCase().includes(searchTerm.toLowerCase());
+      const searchStr = `${task.building_name || ''} ${task.apartment_code || ''} ${task.worker_name || ''}`.toLowerCase();
+      searchMatch = searchStr.includes(searchTerm.toLowerCase());
     }
     return statusMatch && dateMatch && searchMatch;
   }) : [];
@@ -178,6 +200,21 @@ const MaintenanceAdmin = () => {
         <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
           {/* Tabs */}
           <div className="flex border-b border-slate-700/50 overflow-x-auto hide-scrollbar w-full md:w-auto">
+            <button
+              className={`px-6 py-3 font-medium flex items-center transition-colors border-b-2 whitespace-nowrap ${
+                activeTab === 'tenant-requests' 
+                  ? 'text-primary border-primary bg-primary/5' 
+                  : 'text-slate-400 border-transparent hover:text-white hover:bg-slate-800/30'
+              }`}
+              onClick={() => setActiveTab('tenant-requests')}
+            >
+              <AlertCircle size={18} className="me-2" /> Tenant Requests
+              {tenantRequests?.filter(t => t.status === 'Open' || t.status === 'In Progress').length > 0 && (
+                <span className="ms-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full animate-pulse">
+                  {tenantRequests.filter(t => t.status === 'Open' || t.status === 'In Progress').length}
+                </span>
+              )}
+            </button>
             <button
               className={`px-6 py-3 font-medium flex items-center transition-colors border-b-2 whitespace-nowrap ${
                 activeTab === 'pending' 
@@ -240,6 +277,110 @@ const MaintenanceAdmin = () => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-8 pt-0 hide-scrollbar">
+        {activeTab === 'tenant-requests' && (
+          <div className="space-y-4">
+            {loadingTenantRequests ? (
+              <div className="text-white">Loading tenant requests...</div>
+            ) : tenantRequests?.length === 0 ? (
+              <div className="glass-card p-12 text-center">
+                <AlertCircle size={48} className="text-slate-500 mx-auto mb-4" />
+                <h3 className="text-xl font-bold text-white mb-2">No Tenant Requests</h3>
+                <p className="text-slate-400">Tenants have not submitted any maintenance requests yet.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {tenantRequests?.map(ticket => {
+                  const statusColors = {
+                    'Open': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+                    'In Progress': 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+                    'Resolved': 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+                    'Rejected': 'bg-red-500/20 text-red-400 border-red-500/30',
+                    'Closed': 'bg-slate-600/40 text-slate-400 border-slate-600/40'
+                  };
+                  const color = statusColors[ticket.status] || statusColors['Open'];
+                  
+                  return (
+                    <div key={ticket.id} className={`glass-card p-6 border-l-4 ${ticket.status === 'Open' ? 'border-l-red-500' : 'border-l-slate-600'}`}>
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                            #{ticket.id} - {ticket.title}
+                            <span className={`text-xs px-2 py-0.5 rounded-full border ${color}`}>{ticket.status}</span>
+                            {ticket.priority === 'Urgent' && <span className="bg-red-500/20 text-red-400 text-xs px-2 py-0.5 rounded-full font-bold animate-pulse">URGENT</span>}
+                          </h3>
+                          <div className="text-sm text-slate-400 mt-1">
+                            Submitted by: {ticket.tenant_name} | {ticket.building_name} - Apt {ticket.apartment_code} | {new Date(ticket.created_at).toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <select 
+                            value={ticket.status}
+                            onChange={(e) => updateTicketStatusMutation.mutate({ ticketId: ticket.id, data: { status: e.target.value } })}
+                            disabled={updateTicketStatusMutation.isPending}
+                            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary"
+                          >
+                            <option value="Open">Open</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Resolved">Resolved</option>
+                            <option value="Rejected">Rejected</option>
+                            <option value="Closed">Closed</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 text-slate-300 text-sm whitespace-pre-wrap">
+                        <span className="text-xs text-slate-400 font-semibold block mb-1">Issue Description:</span>
+                        {ticket.description}
+                      </div>
+
+                      {/* Worker Resolution Proof & Notes */}
+                      {(ticket.worker_notes || ticket.before_photo || ticket.after_photo || ticket.worker_name) && (
+                        <div className="bg-emerald-950/25 border border-emerald-500/30 p-4 rounded-xl mt-3 space-y-3">
+                          <div className="flex items-center justify-between text-xs text-emerald-300 font-semibold">
+                            <span>Technician: {ticket.worker_name || 'Maintenance Tech'}</span>
+                            {ticket.completion_date && <span>Completed: {new Date(ticket.completion_date).toLocaleString()}</span>}
+                          </div>
+                          {ticket.worker_notes && (
+                            <p className="text-sm text-slate-200">
+                              <span className="text-slate-400 font-medium">Resolution Notes: </span>
+                              {ticket.worker_notes}
+                            </p>
+                          )}
+                          {(ticket.before_photo || ticket.after_photo) && (
+                            <div className="flex items-center gap-4 pt-1">
+                              {ticket.before_photo && (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Before Work</span>
+                                  <img 
+                                    src={ticket.before_photo} 
+                                    alt="Before Repair" 
+                                    className="w-24 h-24 object-cover rounded-lg border border-slate-700 hover:scale-105 transition-transform cursor-pointer shadow-md"
+                                    onClick={() => window.open(ticket.before_photo, '_blank')}
+                                  />
+                                </div>
+                              )}
+                              {ticket.after_photo && (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] uppercase font-bold text-emerald-400 block">After Repair</span>
+                                  <img 
+                                    src={ticket.after_photo} 
+                                    alt="After Repair" 
+                                    className="w-24 h-24 object-cover rounded-lg border border-emerald-500/50 hover:scale-105 transition-transform cursor-pointer shadow-md"
+                                    onClick={() => window.open(ticket.after_photo, '_blank')}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === 'pending' && (
           <div className="space-y-6">
             {loadingPending ? (

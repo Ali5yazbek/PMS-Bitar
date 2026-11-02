@@ -8,7 +8,7 @@ import {
   ArrowDownCircle, ArrowUpCircle, RefreshCcw, ArrowRightCircle, FileText, Home, Download,
   Building2, Wallet, TrendingUp, PieChart, Activity, Calendar, ArrowUpRight
 } from 'lucide-react';
-
+import { useCurrency } from '../contexts/CurrencyContext';
 
 
 const InsuranceDashboardTab = () => {
@@ -334,6 +334,7 @@ const InsuranceActionsTab = () => {
 
 const RentManagementTab = () => {
   const { t } = useTranslation();
+  const { formatAmount } = useCurrency();
   const [tempStartDate, setTempStartDate] = useState(() => {
     const d = new Date();
     d.setDate(1);
@@ -435,9 +436,9 @@ const RentManagementTab = () => {
             <tbody>
               <tr>
                 <td className="py-2 px-3 border-r border-gray-300">{totalStats.total_rented_rooms} {t('rentinsurancehub.units', { defaultValue: `Units` })}</td>
-                <td className="py-2 px-3 border-r border-gray-300">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(totalStats.expected_rent).toLocaleString()}</td>
-                <td className="py-2 px-3 border-r border-gray-300">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(totalStats.total_collected).toLocaleString()}</td>
-                <td className="py-2 px-3 border-r border-gray-300">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(totalStats.outstanding_balance).toLocaleString()}</td>
+                <td className="py-2 px-3 border-r border-gray-300">{formatAmount(totalStats.expected_rent)}</td>
+                <td className="py-2 px-3 border-r border-gray-300">{formatAmount(totalStats.total_collected)}</td>
+                <td className="py-2 px-3 border-r border-gray-300">{formatAmount(totalStats.outstanding_balance)}</td>
                 <td className="py-2 px-3 font-bold">{collectionRate}%</td>
               </tr>
             </tbody>
@@ -465,9 +466,9 @@ const RentManagementTab = () => {
                     <tr key={stat.building_id} className="border-b border-gray-300">
                       <td className="py-2 px-3 font-bold capitalize border-r border-gray-300">{stat.building_name}</td>
                       <td className="py-2 px-3 border-r border-gray-300">{stat.total_rented_rooms}</td>
-                      <td className="py-2 px-3 border-r border-gray-300">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(stat.expected_rent).toLocaleString()}</td>
-                      <td className="py-2 px-3 border-r border-gray-300">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(stat.total_collected).toLocaleString()}</td>
-                      <td className="py-2 px-3 border-r border-gray-300 text-red-600">{Number(stat.outstanding_balance) > 0 ? `CFA ${Number(stat.outstanding_balance).toLocaleString()}` : '-'}</td>
+                      <td className="py-2 px-3 border-r border-gray-300">{formatAmount(stat.expected_rent)}</td>
+                      <td className="py-2 px-3 border-r border-gray-300">{formatAmount(stat.total_collected)}</td>
+                      <td className="py-2 px-3 border-r border-gray-300">{Number(stat.outstanding_balance) > 0 ? formatAmount(stat.outstanding_balance) : '-'}</td>
                       <td className="py-2 px-3 font-bold">{bRate}%</td>
                     </tr>
                   )
@@ -567,17 +568,17 @@ const RentManagementTab = () => {
                   {stats.map(stat => {
                     const bRate = stat.expected_rent > 0 ? ((stat.total_collected / stat.expected_rent) * 100).toFixed(0) : 0;
                     return (
-                      <tr key={stat.building_id} className="border-b border-slate-700/50 text-slate-200 hover:bg-slate-800/30 transition-colors">
+                      <tr key={stat.building_id} className="border-b border-slate-700/50 text-slate-200 hover:bg-slate-800/30 transition-colors print:break-inside-avoid">
                         <td className="py-3 px-4 font-bold capitalize border-r border-slate-700/50 flex items-center gap-2"><Building2 size={16} className="text-slate-400" /> {stat.building_name}</td>
                         <td className="py-3 px-4 border-r border-slate-700/50">{stat.total_rented_rooms}</td>
                         <td className="py-3 px-4 border-r border-slate-700/50 font-medium">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(stat.expected_rent).toLocaleString()}</td>
-                        <td className="py-3 px-4 border-r border-slate-700/50 font-medium text-success">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(stat.total_collected).toLocaleString()}</td>
-                        <td className="py-3 px-4 border-r border-slate-700/50 font-medium text-danger">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(stat.outstanding_balance).toLocaleString()}</td>
+                        <td className="py-3 px-4 border-r border-slate-700/50 font-medium text-success print:text-black">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(stat.total_collected).toLocaleString()}</td>
+                        <td className="py-3 px-4 border-r border-slate-700/50 font-medium text-danger print:text-black">{t('rentinsurancehub.cfa', { defaultValue: `CFA` })} {Number(stat.outstanding_balance).toLocaleString()}</td>
                         <td className="py-3 px-4">
-                          <div className="w-full bg-slate-700/50 h-2 rounded-full mt-1">
+                          <div className="w-full bg-slate-700/50 h-2 rounded-full mt-1 print:hidden">
                              <div className={`h-2 rounded-full ${bRate >= 90 ? 'bg-success' : bRate >= 50 ? 'bg-warning' : 'bg-danger'}`} style={{ width: `${bRate}%` }}></div>
                           </div>
-                          <span className="text-xs text-slate-400 font-bold mt-1 inline-block">{bRate}%</span>
+                          <span className="text-xs text-slate-400 font-bold mt-1 inline-block print:text-black">{bRate}%</span>
                         </td>
                       </tr>
                     );

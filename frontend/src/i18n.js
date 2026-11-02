@@ -1,6 +1,7 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
+import api from './api/axios';
 
 const resources = {
   en: {
@@ -754,13 +755,18 @@ const resources = {
         status_rented: "Rented",
         status_maintenance: "Maintenance",
         add_btn: "Add Apartment",
+        add_title: "Add New Apartment",
+        edit_title: "Edit Apartment",
+        modal_subtitle: "Configure unit details, status, and pricing",
         building_label: "Building",
         select_building: "Select Building",
         code_label: "Code/Number",
         code_placeholder: "e.g. A1",
         rent_label: "Monthly Rent (CFA)",
         insurance_label: "Monthly Insurance (CFA)",
+        total_monthly: "Total Monthly Scheduled",
         save: "Save",
+        update_btn: "Update Apartment",
         cancel: "Cancel",
         col_apartment: "Apartment",
         col_building: "Building",
@@ -1062,7 +1068,11 @@ const resources = {
         complete: "Complete",
         card_floors: "Floors",
         card_materials: "Materials",
-        card_progress: "Progress"
+        card_progress: "Progress",
+        delete_btn: "Delete Project",
+        delete_confirm: "Are you sure you want to delete this project? This will permanently remove its estimates and specifications.",
+        delete_success: "Project deleted successfully",
+        delete_failed: "Failed to delete project"
       },
       users: {
         title: "User Management",
@@ -1260,8 +1270,16 @@ const resources = {
         est_remain: "Est. Fuel Remaining:",
         actual_prompt: "What is the Actual Fuel Liter Remaining in the tank?",
         actual_desc: "If it is not the same as the system estimate, the AI will analyze it to detect leaks, theft, or sensor issues.",
+        actual_desc_expanded: "If it is not the same as the system estimate, the AI will analyze it to detect leaks, theft, or sensor issues. Leave blank if you haven't checked and want to accept the system's estimate.",
         sys_est: "System Estimate:",
         btn_verify: "Verify & Update Fuel",
+        btn_verify_ai: "Run AI Analysis & Verify",
+        analyzing: "Analyzing...",
+        not_recorded: "Not Recorded",
+        prev_hours: "Previous Hours:",
+        agent_reported_fuel: "Agent Reported Fuel:",
+        not_entered: "Not Entered",
+        ai_analytics_engine: "AI Analytics Engine",
         no_generator: "No Generator Found",
         no_gen_desc: "This building does not have a generator registered yet.",
         register: "Register Generator",
@@ -2035,13 +2053,18 @@ const resources = {
         status_rented: "Loué",
         status_maintenance: "Maintenance",
         add_btn: "Ajouter un Appartement",
+        add_title: "Ajouter un Nouvel Appartement",
+        edit_title: "Modifier l'Appartement",
+        modal_subtitle: "Configurer les détails de l'unité, le statut et les tarifs",
         building_label: "Bâtiment",
         select_building: "Sélectionner un Bâtiment",
         code_label: "Code/Numéro",
         code_placeholder: "ex. A1",
         rent_label: "Loyer Mensuel (CFA)",
         insurance_label: "Assurance Mensuelle (CFA)",
+        total_monthly: "Charge Mensuelle Totale",
         save: "Enregistrer",
+        update_btn: "Mettre à jour l'Appartement",
         cancel: "Annuler",
         col_apartment: "Appartement",
         col_building: "Bâtiment",
@@ -2343,7 +2366,11 @@ const resources = {
         complete: "Terminé",
         card_floors: "Étages",
         card_materials: "Matériaux",
-        card_progress: "Progression"
+        card_progress: "Progression",
+        delete_btn: "Supprimer le Projet",
+        delete_confirm: "Êtes-vous sûr de vouloir supprimer ce projet ? Cela supprimera définitivement ses devis et spécifications.",
+        delete_success: "Projet supprimé avec succès",
+        delete_failed: "Échec de la suppression du projet"
       },
       users: {
         title: "Gestion des Utilisateurs",
@@ -3193,13 +3220,18 @@ const resources = {
         status_rented: "مؤجرة",
         status_maintenance: "صيانة",
         add_btn: "إضافة شقة",
+        add_title: "إضافة شقة جديدة",
+        edit_title: "تعديل الشقة",
+        modal_subtitle: "تهيئة تفاصيل الوحدة وحالتها والأسعار",
         building_label: "المبنى",
         select_building: "اختر المبنى",
         code_label: "الرمز/الرقم",
         code_placeholder: "مثال: A1",
         rent_label: "الإيجار الشهري (CFA)",
         insurance_label: "التأمين الشهري (CFA)",
+        total_monthly: "إجمالي الرسوم الشهرية",
         save: "حفظ",
+        update_btn: "تحديث الشقة",
         cancel: "إلغاء",
         col_apartment: "الشقة",
         col_building: "المبنى",
@@ -3501,7 +3533,11 @@ const resources = {
         complete: "مكتمل",
         card_floors: "طوابق",
         card_materials: "مواد",
-        card_progress: "التقدم"
+        card_progress: "التقدم",
+        delete_btn: "حذف المشروع",
+        delete_confirm: "هل أنت متأكد من رغبتك في حذف هذا المشروع؟ سيؤدي ذلك إلى حذف تقديراته ومواصفاته نهائياً.",
+        delete_success: "تم حذف المشروع بنجاح",
+        delete_failed: "فشل في حذف المشروع"
       },
       users: {
         title: "إدارة المستخدمين",
@@ -3699,8 +3735,16 @@ const resources = {
         est_remain: "Restant Est. :",
         actual_prompt: "Quel est le nombre réel de litres restants ?",
         actual_desc: "Si différent de l'estimation, l'IA cherchera des fuites ou vols.",
+        actual_desc_expanded: "Si différent de l'estimation du système, l'IA cherchera des fuites, des vols ou des problèmes de capteur. Laissez vide si vous n'avez pas vérifié et souhaitez accepter l'estimation.",
         sys_est: "Estimation Système :",
         btn_verify: "Vérifier & Mettre à Jour",
+        btn_verify_ai: "Lancer l'Analyse IA & Vérifier",
+        analyzing: "Analyse en cours...",
+        not_recorded: "Non Enregistré",
+        prev_hours: "Heures Précédentes :",
+        agent_reported_fuel: "Carburant Déclaré par l'Agent :",
+        not_entered: "Non Saisi",
+        ai_analytics_engine: "Moteur Analytique IA",
         no_generator: "Aucun Générateur Trouvé",
         no_gen_desc: "Ce bâtiment n'a pas encore de générateur.",
         register: "Enregistrer Générateur",
@@ -3732,8 +3776,39 @@ i18n
     resources,
     fallbackLng: 'en',
     interpolation: {
-      escapeValue: false // React already escapes values
+      escapeValue: false
     }
   });
+
+i18n.on('languageChanged', (lng) => {
+  document.dir = lng === 'ar' ? 'rtl' : 'ltr';
+  // Persist language to backend if user is logged in
+  const token = localStorage.getItem('token');
+  if (token) {
+    api.put('/users/language', { preferred_language: lng })
+      .catch(err => console.error('Failed to sync language', err));
+  }
+});
+
+// Initial direction
+document.dir = i18n.language === 'ar' ? 'rtl' : 'ltr';
+
+// Fetch DB overrides async
+export const fetchTranslations = async () => {
+  try {
+    const res = await api.get('/translations');
+    const data = res.data;
+    if (data) {
+      ['en', 'fr', 'ar'].forEach(lng => {
+        if (data[lng] && Object.keys(data[lng]).length > 0) {
+          i18n.addResourceBundle(lng, 'translation', data[lng], true, true);
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Failed to load DB translations', error);
+  }
+};
+fetchTranslations();
 
 export default i18n;

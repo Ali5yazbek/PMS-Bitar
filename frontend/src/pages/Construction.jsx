@@ -27,6 +27,7 @@ const Construction = () => {
     mutationFn: (projectData) => axios.post('/constructions', projectData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['constructions'] });
+      queryClient.invalidateQueries({ queryKey: ['workshopProjects'] });
       setShowAdd(false);
       setNewProject({ name: '', owner: '', location: '', start_date: '', end_date: '', budget: '', manager: '' });
     }
@@ -34,13 +35,20 @@ const Construction = () => {
 
   const updateStatusMutation = useMutation({
     mutationFn: ({ id, status }) => axios.put(`/constructions/${id}`, { ...projects.find(p => p.id === id), status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['constructions'] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['constructions'] });
+      queryClient.invalidateQueries({ queryKey: ['workshopProjects'] });
+    }
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id) => axios.delete(`/constructions/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['constructions'] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['constructions'] });
+      queryClient.invalidateQueries({ queryKey: ['workshopProjects'] });
+    }
   });
+
 
   const filteredProjects = projects.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
 

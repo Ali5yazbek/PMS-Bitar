@@ -54,6 +54,10 @@ class FuelController {
             $type = $data['type'];
             $amount = floatval($data['amount']);
             $costPerLiter = floatval($data['cost_per_liter'] ?? 0);
+            
+            $supplierId = !empty($data['supplier_id']) ? $data['supplier_id'] : null;
+            $date = !empty($data['date']) ? $data['date'] : date('Y-m-d H:i:s');
+            $notes = !empty($data['notes']) ? $data['notes'] : null;
 
             $this->db->beginTransaction();
 
@@ -67,10 +71,10 @@ class FuelController {
                 $type,
                 $amount,
                 $costPerLiter,
-                $data['supplier_id'] ?? null,
-                $data['date'] ?? date('Y-m-d H:i:s'),
+                $supplierId,
+                $date,
                 $userId,
-                $data['notes'] ?? null,
+                $notes,
                 $receiptPath
             ]);
 
@@ -85,6 +89,38 @@ class FuelController {
             echo json_encode(['message' => 'Fuel movement recorded successfully']);
         } catch (PDOException $e) {
             $this->db->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+    }
+
+    public function updateMovement($id) {
+        try {
+            $data = json_decode(file_get_contents("php://input"), true);
+            if (!$data) $data = $_POST;
+            
+            $stmt = $this->db->prepare("UPDATE fuel_movements SET amount=?, cost_per_liter=?, date=?, type=?, notes=? WHERE id=?");
+            $stmt->execute([
+                floatval($data['amount'] ?? 0),
+                floatval($data['cost_per_liter'] ?? 0),
+                $data['date'] ?? date('Y-m-d'),
+                $data['type'] ?? 'Refill',
+                $data['notes'] ?? null,
+                $id
+            ]);
+            echo json_encode(['message' => 'Movement updated']);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+    }
+
+    public function deleteMovement($id) {
+        try {
+            $stmt = $this->db->prepare("UPDATE fuel_movements SET status='Voided', amount=0, cost_per_liter=0, notes=CONCAT(COALESCE(notes,''), ' [VOIDED]') WHERE id=?");
+            $stmt->execute([$id]);
+            echo json_encode(['message' => 'Movement voided']);
+        } catch (Exception $e) {
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -133,10 +169,10 @@ class FuelController {
 
             $todayStmt = $this->db->query("
                 SELECT r.generator_id,
-                       COALESCE(SUM(r.actual_fuel_used), 0) as consumed_today,
-                       COALESCE(SUM(r.running_hours), 0) as hours_today
-                FROM generator_daily_reports r
-                WHERE r.date = '{$today}'
+                       COALESCE(SUM(COALESCE(r.admin_actual_fuel, r.ml_predicted_fuel_burn)), 0) as consumed_today,
+                       COALESCE(SUM(r.calculated_hours_worked), 0) as hours_today
+                FROM generator_logs r
+                WHERE r.log_date = '{$today}'
                 GROUP BY r.generator_id
             ");
             $todayData = [];
@@ -145,9 +181,9 @@ class FuelController {
             }
 
             $avgStmt = $this->db->query("
-                SELECT generator_id, AVG(actual_fuel_used) as avg_daily_fuel
-                FROM generator_daily_reports
-                WHERE actual_fuel_used > 0 AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                SELECT generator_id, AVG(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)) as avg_daily_fuel
+                FROM generator_logs
+                WHERE COALESCE(admin_actual_fuel, ml_predicted_fuel_burn) > 0 AND log_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                 GROUP BY generator_id
             ");
             $avgData = [];
@@ -263,9 +299,9 @@ class FuelController {
             $generators = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             $avgStmt = $this->db->query("
-                SELECT generator_id, AVG(actual_fuel_used) as avg_daily_fuel
-                FROM generator_daily_reports
-                WHERE actual_fuel_used > 0 AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                SELECT generator_id, AVG(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)) as avg_daily_fuel
+                FROM generator_logs
+                WHERE COALESCE(admin_actual_fuel, ml_predicted_fuel_burn) > 0 AND log_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                 GROUP BY generator_id
             ");
             $avgData = [];
@@ -275,9 +311,9 @@ class FuelController {
 
             $todayStmt = $this->db->query("
                 SELECT generator_id,
-                       COALESCE(SUM(actual_fuel_used), 0) as consumed_today,
-                       COALESCE(SUM(running_hours), 0) as hours_today
-                FROM generator_daily_reports WHERE date = '{$today}' GROUP BY generator_id
+                       COALESCE(SUM(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)), 0) as consumed_today,
+                       COALESCE(SUM(calculated_hours_worked), 0) as hours_today
+                FROM generator_logs WHERE log_date = '{$today}' GROUP BY generator_id
             ");
             $todayData = [];
             while ($row = $todayStmt->fetch(PDO::FETCH_ASSOC)) {
@@ -392,6 +428,14 @@ class FuelController {
                 return;
             }
 
+            $this->db->beginTransaction();
+
+            // Lock lowest ID first to prevent deadlocks
+            $firstId = min($fromId, $toId);
+            $secondId = max($fromId, $toId);
+            $this->db->prepare("SELECT id FROM generators WHERE id = ? FOR UPDATE")->execute([$firstId]);
+            $this->db->prepare("SELECT id FROM generators WHERE id = ? FOR UPDATE")->execute([$secondId]);
+
             $srcStmt = $this->db->prepare("SELECT id, name, current_fuel, fuel_capacity FROM generators WHERE id = ?");
             $srcStmt->execute([$fromId]);
             $src = $srcStmt->fetch(PDO::FETCH_ASSOC);
@@ -401,24 +445,25 @@ class FuelController {
             $dst = $dstStmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$src || !$dst) {
+                $this->db->rollBack();
                 http_response_code(404);
                 echo json_encode(['error' => 'Generator not found.']);
                 return;
             }
             if ($amount > floatval($src['current_fuel'])) {
+                $this->db->rollBack();
                 http_response_code(400);
                 echo json_encode(['error' => "Insufficient fuel in {$src['name']}. Available: " . round(floatval($src['current_fuel']), 1) . " L."]);
                 return;
             }
             $newDstFuel = floatval($dst['current_fuel']) + $amount;
             if (floatval($dst['fuel_capacity']) > 0 && $newDstFuel > floatval($dst['fuel_capacity'])) {
+                $this->db->rollBack();
                 $freeInDst = round(floatval($dst['fuel_capacity']) - floatval($dst['current_fuel']), 1);
                 http_response_code(400);
                 echo json_encode(['error' => "Transfer would overfill {$dst['name']}. Free capacity: {$freeInDst} L."]);
                 return;
             }
-
-            $this->db->beginTransaction();
 
             $outStmt = $this->db->prepare("
                 INSERT INTO fuel_movements (generator_id, type, amount, date, user_id, notes)
@@ -478,14 +523,14 @@ class FuelController {
                 SELECT g.id, g.name, g.fuel_capacity, g.current_fuel,
                        g.expected_fuel_consumption_per_hour,
                        b.name as building_name,
-                       AVG(r.actual_fuel_used) as avg_daily_fuel,
+                       AVG(COALESCE(r.admin_actual_fuel, r.ml_predicted_fuel_burn)) as avg_daily_fuel,
                        COUNT(r.id) as report_count
                 FROM generators g
                 JOIN buildings b ON g.building_id = b.id
-                LEFT JOIN generator_daily_reports r 
+                LEFT JOIN generator_logs r 
                     ON r.generator_id = g.id 
-                    AND r.actual_fuel_used > 0 
-                    AND r.date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    AND COALESCE(r.admin_actual_fuel, r.ml_predicted_fuel_burn) > 0 
+                    AND r.log_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                 GROUP BY g.id, g.name, g.fuel_capacity, g.current_fuel,
                          g.expected_fuel_consumption_per_hour, b.name
                 ORDER BY b.name ASC

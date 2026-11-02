@@ -16,16 +16,17 @@ const ApartmentElectricity = () => {
   const [activeTab, setActiveTab] = useState('meter'); // 'meter' or 'subscription'
   const [toastMsg, setToastMsg] = useState('');
   const [ocrLoading, setOcrLoading] = useState(false);
+
   
   // Meter form state
   const [meterForm, setMeterForm] = useState({
     previous_reading: '', current_reading: '', price_per_kwh: '', reading_date: new Date().toISOString().split('T')[0], photo: null
   });
 
-  // Subscription form state
   const [subForm, setSubForm] = useState({
-    monthly_fee: '', start_date: new Date().toISOString().split('T')[0], end_date: '', status: 'Active'
+    type: 'Fixed Monthly', monthly_fee: '', amps: '', cost_per_amp: '', status: 'Active'
   });
+
 
   const { data: readings } = useQuery({
     queryKey: ['meterReadings', id],
@@ -62,13 +63,15 @@ const ApartmentElectricity = () => {
   useEffect(() => {
     if (activeSub && activeSub.status !== 'None') {
       setSubForm({
+        type: activeSub.type || (activeSub.amps > 0 ? 'Fixed Amp' : (activeSub.monthly_fee > 0 ? 'Fixed Monthly' : 'Meter')),
         monthly_fee: activeSub.monthly_fee || '',
-        start_date: activeSub.start_date || new Date().toISOString().split('T')[0],
-        end_date: activeSub.end_date || '',
+        amps: activeSub.amps || '',
+        cost_per_amp: activeSub.cost_per_amp || '',
         status: activeSub.status || 'Active'
       });
     }
   }, [activeSub]);
+
 
   useEffect(() => {
     if (readings && readings.length > 0 && meterForm.previous_reading === '') {
@@ -123,13 +126,18 @@ const ApartmentElectricity = () => {
 
   const subMutation = useMutation({
     mutationFn: (data) => api.post(`/energy/apartments/${id}/subscriptions`, data),
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries(['apartmentSubscription', id]);
       queryClient.invalidateQueries(['electricityInvoices', id]);
-      setToastMsg('Subscription saved successfully!');
-      setTimeout(() => setToastMsg(''), 3000);
+      const d = res.data;
+      const msg = d?.start_date
+        ? `Subscription saved! Period: ${d.start_date} → ${d.end_date}`
+        : 'Subscription saved successfully!';
+      setToastMsg(msg);
+      setTimeout(() => setToastMsg(''), 5000);
     }
   });
+
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-background">
@@ -175,7 +183,7 @@ const ApartmentElectricity = () => {
             onClick={() => setActiveTab('subscription')}
             className={`px-4 py-2 font-medium transition-colors ${activeTab === 'subscription' ? 'text-primary border-b-2 border-primary' : 'text-muted hover:text-white'}`}
           >
-            {t('apartmentelectricity.fixed_subscription', { defaultValue: `Fixed Subscription` })}
+            {t('apartmentelectricity.subscription_settings', { defaultValue: `Subscription Settings` })}
           </button>
         </div>
 
@@ -245,22 +253,54 @@ const ApartmentElectricity = () => {
                 <h3 className="text-lg font-bold text-white mb-4">{t('apartmentelectricity.subscription_settings', { defaultValue: `Subscription Settings` })}</h3>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-muted mb-1">{t('apartmentelectricity.monthly_fee_cfa', { defaultValue: `Monthly Fee (CFA)` })}</label>
-                    <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                      value={subForm.monthly_fee} onChange={e => setSubForm({...subForm, monthly_fee: e.target.value})} />
+                    <label className="block text-sm font-medium text-muted mb-1">Subscription Type</label>
+                    <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white mb-2"
+                        value={subForm.type} onChange={e => setSubForm({...subForm, type: e.target.value})}>
+                        <option value="Fixed Monthly">Fixed Monthly</option>
+                        <option value="Fixed Amp">Fixed Amp</option>
+                        <option value="Meter">Meter Reading</option>
+                    </select>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  
+                  {subForm.type === 'Fixed Monthly' && (
                     <div>
-                      <label className="block text-sm font-medium text-muted mb-1">{t('apartmentelectricity.start_date', { defaultValue: `Start Date` })}</label>
-                      <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                        value={subForm.start_date} onChange={e => setSubForm({...subForm, start_date: e.target.value})} />
+                      <label className="block text-sm font-medium text-muted mb-1">{t('apartmentelectricity.monthly_fee_cfa', { defaultValue: `Monthly Fee (CFA)` })}</label>
+                      <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                        value={subForm.monthly_fee} onChange={e => setSubForm({...subForm, monthly_fee: e.target.value})} />
                     </div>
+                  )}
+
+                  {subForm.type === 'Fixed Amp' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-muted mb-1">Amps</label>
+                        <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                          value={subForm.amps} onChange={e => setSubForm({...subForm, amps: e.target.value})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-muted mb-1">Cost per Amp (CFA)</label>
+                        <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                          value={subForm.cost_per_amp} onChange={e => setSubForm({...subForm, cost_per_amp: e.target.value})} />
+                      </div>
+                      <div className="pt-2">
+                        <p className="text-sm text-muted">Monthly Fee: <strong className="text-white">CFA {(subForm.amps * subForm.cost_per_amp) || 0}</strong></p>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Auto-date banner — replaces manual date pickers */}
+                  <div className="flex items-start gap-3 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-xl">
+                    <span className="text-indigo-400 text-lg mt-0.5">📅</span>
                     <div>
-                      <label className="block text-sm font-medium text-muted mb-1">{t('apartmentelectricity.end_date', { defaultValue: `End Date` })}</label>
-                      <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                        value={subForm.end_date} onChange={e => setSubForm({...subForm, end_date: e.target.value})} />
+                      <p className="text-sm font-semibold text-indigo-300">Dates are set automatically</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Start: <strong className="text-white">{new Date().toLocaleDateString('en-GB')}</strong> &nbsp;→&nbsp;
+                        End: <strong className="text-white">{new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('en-GB')}</strong>
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">Subscription always starts today and runs for exactly 30 days.</p>
                     </div>
                   </div>
+
                   <div>
                      <label className="block text-sm font-medium text-muted mb-1">{t('apartmentelectricity.status', { defaultValue: `Status` })}</label>
                      <select className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white"
@@ -269,6 +309,7 @@ const ApartmentElectricity = () => {
                         <option value="Inactive">{t('apartmentelectricity.inactive', { defaultValue: `Inactive` })}</option>
                      </select>
                   </div>
+
                   <button 
                     onClick={() => subMutation.mutate(subForm)}
                     disabled={subMutation.isLoading}

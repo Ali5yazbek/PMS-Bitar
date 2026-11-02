@@ -26,19 +26,26 @@ class AuthController {
                 'name' => $user['name']
             ];
             $token = JWT::encode($payload);
+            unset($user['password']);
+
+            // Fetch global settings like exchange rate
+            $settingsStmt = $this->db->query("SELECT setting_value FROM global_settings WHERE setting_key = 'usd_to_cfa'");
+            $usdToCfa = 600; // default fallback
+            if ($row = $settingsStmt->fetch()) {
+                $usdToCfa = (float)$row['setting_value'];
+            }
+
             echo json_encode([
-                'message' => 'Login successful',
-                'token' => $token,
-                'user' => [
-                    'id' => $user['id'],
-                    'name' => $user['name'],
-                    'email' => $user['email'],
-                    'role' => $user['role']
+                'success' => true, 
+                'token' => $token, 
+                'user' => $user,
+                'settings' => [
+                    'exchange_rate' => $usdToCfa
                 ]
             ]);
         } else {
             http_response_code(401);
-            echo json_encode(['error' => 'Invalid email or password']);
+            echo json_encode(['error' => 'Invalid username, email, or password']);
         }
     }
 
@@ -62,7 +69,19 @@ class AuthController {
         $user = $stmt->fetch();
 
         if ($user) {
-            echo json_encode(['user' => $user]);
+            // Fetch global settings like exchange rate
+            $settingsStmt = $this->db->query("SELECT setting_value FROM global_settings WHERE setting_key = 'usd_to_cfa'");
+            $usdToCfa = 600; // default fallback
+            if ($row = $settingsStmt->fetch()) {
+                $usdToCfa = (float)$row['setting_value'];
+            }
+
+            echo json_encode([
+                'user' => $user,
+                'settings' => [
+                    'exchange_rate' => $usdToCfa
+                ]
+            ]);
         } else {
             http_response_code(404);
             echo json_encode(['error' => 'User not found']);

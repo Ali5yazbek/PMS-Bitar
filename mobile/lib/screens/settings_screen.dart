@@ -1,6 +1,7 @@
 // ─── Settings Screen ──────────────────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/app_theme.dart';
 import '../config/app_config.dart';
@@ -70,6 +71,53 @@ class SettingsScreen extends ConsumerWidget {
 
         const SizedBox(height: 16),
 
+        const SizedBox(height: 16),
+
+        // Reports & Financials
+        if (user?.role == 'admin') ...[
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            child: Text(
+              'REPORTS & FINANCIALS',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.2),
+            ),
+          ),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: _buildIcon(Icons.dashboard_outlined, AppTheme.primary),
+                  title: const Text('Apartment Cost Report', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                  trailing: const Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
+                  onTap: () => context.push('/apartment-costs'),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: _buildIcon(Icons.business_outlined, AppTheme.accent),
+                  title: const Text('Financial Building Report', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                  trailing: const Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
+                  onTap: () => context.push('/financial-buildings-report'),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: _buildIcon(Icons.bar_chart_outlined, AppTheme.success),
+                  title: const Text('Financial Reports', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                  trailing: const Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
+                  onTap: () => context.push('/financial-reports'),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: _buildIcon(Icons.shield_outlined, AppTheme.warning),
+                  title: const Text('Insurance Hub', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                  trailing: const Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
+                  onTap: () => context.push('/rent-hub'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+
         // App info
         Card(
           child: Column(
@@ -108,6 +156,16 @@ class SettingsScreen extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+  Widget _buildIcon(IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, color: color, size: 20),
     );
   }
 }

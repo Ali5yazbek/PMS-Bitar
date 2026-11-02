@@ -42,6 +42,26 @@ class POSController {
         echo json_encode($invoice);
     }
 
+    public function getByReference($ref) {
+        AuthMiddleware::requireLogin();
+        
+        $stmt = $this->db->prepare("SELECT * FROM invoices WHERE invoice_number = ?");
+        $stmt->execute([$ref]);
+        $invoice = $stmt->fetch();
+        
+        if (!$invoice) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Invoice not found']);
+            return;
+        }
+
+        $stmtItems = $this->db->prepare("SELECT i.*, p.name FROM invoice_items i JOIN products p ON i.product_id = p.id WHERE invoice_id = ?");
+        $stmtItems->execute([$invoice['id']]);
+        $invoice['items'] = $stmtItems->fetchAll();
+        
+        echo json_encode($invoice);
+    }
+
     public function checkout() {
         $user = AuthMiddleware::requireLogin();
         
@@ -75,10 +95,11 @@ class POSController {
             $finalAmount = ($subtotal + $totalTva) - $discount;
 
             $stmtInvoice = $this->db->prepare("
-                INSERT INTO invoices (invoice_number, date, customer_type, customer_id, customer_name, subtotal, total_tva, discount, final_amount)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO invoices (invoice_number, date, customer_type, customer_id, customer_name, subtotal, total_tva, discount, final_amount, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmtInvoice->execute([$invoiceNumber, $date, $customerType, $customerId, $customerName, $subtotal, $totalTva, $discount, $finalAmount]);
+            $userId = $_SESSION['user_id'] ?? null;
+            $stmtInvoice->execute([$invoiceNumber, $date, $customerType, $customerId, $customerName, $subtotal, $totalTva, $discount, $finalAmount, $userId]);
             $invoiceId = $this->db->lastInsertId();
 
             $stmtItem = $this->db->prepare("

@@ -353,4 +353,47 @@ class FinancialReportsController {
 
         echo json_encode($result);
     }
+
+    public function tenantFinancialLedger() {
+        AuthMiddleware::requireLogin();
+        
+        $tenant_id = $_GET['tenant_id'] ?? null;
+        
+        $sql = "
+            SELECT 
+                rp.id as payment_id,
+                rp.amount as amount_paid,
+                rp.date as payment_date,
+                rp.notes as payment_notes,
+                ri.invoice_number,
+                ri.due_date,
+                ri.period_start,
+                ri.period_end,
+                t.id as tenant_id,
+                t.full_name as tenant_name,
+                t.status as tenant_status,
+                a.code as apartment_code,
+                b.name as building_name
+            FROM rent_payments rp
+            JOIN rent_invoices ri ON rp.invoice_id = ri.id
+            JOIN contracts c ON ri.contract_id = c.id
+            JOIN tenants t ON c.tenant_id = t.id
+            JOIN apartments a ON c.apartment_id = a.id
+            JOIN buildings b ON a.building_id = b.id
+            WHERE rp.amount > 0
+        ";
+        
+        $params = [];
+        if ($tenant_id) {
+            $sql .= " AND c.tenant_id = ?";
+            $params[] = $tenant_id;
+        }
+        
+        $sql .= " ORDER BY rp.date DESC, rp.id DESC";
+        
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        
+        echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    }
 }

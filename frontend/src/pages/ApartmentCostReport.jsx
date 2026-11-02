@@ -273,7 +273,7 @@ const ApartmentCostReport = () => {
                     <td className="p-4 text-center">
                       {cost.receipt_image ? (
                         <a 
-                          href={`${api.defaults.baseURL.replace('/api', '')}${cost.receipt_image}`} 
+                          href={`${api.defaults.baseURL.replace('/api', '')}/${cost.receipt_image.startsWith('/') ? cost.receipt_image.slice(1) : cost.receipt_image}`} 
                           target="_blank" 
                           rel="noreferrer"
                           className="inline-flex items-center justify-center p-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg transition-colors"

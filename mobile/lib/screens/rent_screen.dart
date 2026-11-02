@@ -13,7 +13,9 @@ final rentInvoicesProvider = FutureProvider<List<dynamic>>((ref) async {
 });
 
 class RentScreen extends ConsumerStatefulWidget {
-  const RentScreen({super.key});
+  final String? buildingId;
+  final String? tenantId;
+  const RentScreen({super.key, this.buildingId, this.tenantId});
   @override
   ConsumerState<RentScreen> createState() => _RentScreenState();
 }
@@ -36,17 +38,11 @@ class _RentScreenState extends ConsumerState<RentScreen> {
   Widget build(BuildContext context) {
     final async = ref.watch(rentInvoicesProvider);
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {}, // Future: Generate Invoice
-        backgroundColor: AppTheme.primary,
-        icon: const Icon(Icons.receipt_rounded, color: Colors.white),
-        label: Text('New Invoice', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
-      ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    final isIsolated = widget.buildingId != null || widget.tenantId != null;
+
+    final bodyContent = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
           // Filter chips
           Container(
             height: 70,
@@ -127,8 +123,39 @@ class _RentScreenState extends ConsumerState<RentScreen> {
               ),
             ),
           ),
-        ],
+      ],
+    );
+
+    if (isIsolated) {
+      return Scaffold(
+        backgroundColor: AppTheme.background,
+        appBar: AppBar(
+          backgroundColor: AppTheme.surface,
+          title: Text(widget.buildingId != null ? 'Building Rent' : 'Tenant Rent', style: GoogleFonts.outfit(fontWeight: FontWeight.w600, color: Colors.white)),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: () {}, // Future: Generate Invoice
+          backgroundColor: AppTheme.primary,
+          icon: const Icon(Icons.receipt_rounded, color: Colors.white),
+          label: Text('New Invoice', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
+        ),
+        body: bodyContent,
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {}, // Future: Generate Invoice
+        backgroundColor: AppTheme.primary,
+        icon: const Icon(Icons.receipt_rounded, color: Colors.white),
+        label: Text('New Invoice', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
       ),
+      body: bodyContent,
     );
   }
 }

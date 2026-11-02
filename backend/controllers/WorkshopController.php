@@ -8,7 +8,29 @@ class WorkshopController {
 
     public function index() {
         AuthMiddleware::requireLogin();
-        $stmt = $this->db->query("SELECT * FROM workshop_projects ORDER BY id DESC");
+        $stmt = $this->db->query("
+            SELECT 
+                wp.*,
+                wp.land_area as area,
+                COALESCE(c.id, (SELECT id FROM constructions WHERE workshop_id = wp.id OR name = wp.name LIMIT 1)) as linked_construction_id,
+                COALESCE(
+                    NULLIF((SELECT SUM(total_price) FROM workshop_estimates WHERE project_id = wp.id), 0),
+                    NULLIF(c.estimated_cost, 0),
+                    NULLIF(c.budget, 0),
+                    0
+                ) as estimated_cost,
+                COALESCE(
+                    NULLIF((SELECT COUNT(*) FROM workshop_estimates WHERE project_id = wp.id), 0),
+                    NULLIF((SELECT COUNT(*) FROM construction_materials WHERE construction_id = c.id), 0),
+                    0
+                ) as materials_required,
+                COALESCE(c.status, wp.status) as status,
+                COALESCE(c.actual_cost, 0) as actual_cost,
+                COALESCE(c.budget, 0) as budget
+            FROM workshop_projects wp
+            LEFT JOIN constructions c ON (c.workshop_id = wp.id OR c.name = wp.name)
+            ORDER BY wp.id DESC
+        ");
         echo json_encode($stmt->fetchAll());
     }
 
@@ -378,4 +400,69 @@ class WorkshopController {
             echo json_encode(['error' => $e->getMessage()]);
         }
     }
+
+    public function destroy($id) {
+        $user = AuthMiddleware::requireLogin();
+        
+        try {
+            $this->db->beginTransaction();
+
+            $stmtProj = $this->db->prepare("SELECT * FROM workshop_projects WHERE id = ?");
+            $stmtProj->execute([$id]);
+            $workshop = $stmtProj->fetch();
+
+            $projectName = null;
+            if (!$workshop) {
+                // If not found in workshop_projects, check constructions
+                $stmtC = $this->db->prepare("SELECT * FROM constructions WHERE id = ?");
+                $stmtC->execute([$id]);
+                $cRow = $stmtC->fetch();
+                if (!$cRow) {
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Project not found']);
+                    return;
+                }
+                $projectName = $cRow['name'];
+            } else {
+                $projectName = $workshop['name'];
+            }
+
+            // 1. Unlink inventory transactions
+            $this->db->prepare("UPDATE inventory_transactions SET project_id = NULL WHERE project_id = ?")->execute([$id]);
+
+            // 2. Delete ALL linked constructions (by workshop_id OR by project name)
+            $stmtConst = $this->db->prepare("SELECT id FROM constructions WHERE workshop_id = ? OR name = ?");
+            $stmtConst->execute([$id, $projectName]);
+            $linkedConstructions = $stmtConst->fetchAll();
+
+            foreach ($linkedConstructions as $lc) {
+                $cid = $lc['id'];
+                $this->db->prepare("UPDATE purchase_orders SET construction_id = NULL WHERE construction_id = ?")->execute([$cid]);
+                $this->db->prepare("DELETE FROM construction_material_movements WHERE construction_id = ?")->execute([$cid]);
+                $this->db->prepare("DELETE FROM construction_site_stock WHERE construction_id = ?")->execute([$cid]);
+                $this->db->prepare("DELETE FROM construction_materials WHERE construction_id = ?")->execute([$cid]);
+                $this->db->prepare("DELETE FROM constructions WHERE id = ?")->execute([$cid]);
+            }
+
+            // 3. Delete cascading workshop records
+            $this->db->prepare("DELETE FROM purchase_requests WHERE project_id = ?")->execute([$id]);
+            $this->db->prepare("DELETE FROM workshop_estimates WHERE project_id = ?")->execute([$id]);
+            $this->db->prepare("DELETE FROM workshop_specifications WHERE project_id = ?")->execute([$id]);
+
+            // 4. Delete the workshop project
+            $this->db->prepare("DELETE FROM workshop_projects WHERE id = ? OR name = ?")->execute([$id, $projectName]);
+
+            $this->db->commit();
+            AuditLogger::log('DELETE', 'WorkshopProject', $id, "Deleted workshop project and linked construction: {$projectName}");
+
+            echo json_encode(['message' => 'Workshop project and linked construction deleted successfully']);
+        } catch (Exception $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+    }
 }
+

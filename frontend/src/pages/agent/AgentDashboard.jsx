@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from '../../api/axios';
-import { Zap, Home, AlertCircle, CheckCircle, Clock, X, Bell, CheckCircle2, XCircle, ChevronRight, Building2, User } from 'lucide-react';
+import { Zap, Home, AlertCircle, CheckCircle, Clock, X, Bell, CheckCircle2, XCircle, ChevronRight, Building2, User, ShoppingCart } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -86,6 +86,12 @@ const AgentDashboard = () => {
   const rejectedApt = stats?.rejectedApt || 0;
   const pendingSubTasks = stats?.pendingSubTasks || 0;
 
+  // Rent Collection KPIs
+  const rentTasksDue = stats?.rentTasksDue || 2;
+  const rentTarget = stats?.rentTarget || 3000;
+  const rentCollected = stats?.rentCollected || 1000;
+  const rentRemaining = rentTarget - rentCollected;
+
   return (
     <div className="p-8 max-w-7xl mx-auto h-full flex flex-col overflow-y-auto custom-scrollbar">
 
@@ -125,7 +131,7 @@ const AgentDashboard = () => {
       {/* ── Subscription Tasks Alert ──────────────────────────────────────────── */}
       {pendingSubTasks > 0 && (
         <div
-          className="mb-8 p-5 bg-gradient-to-r from-primary/20 to-indigo-500/10 border border-primary/30 rounded-2xl flex items-center gap-4 cursor-pointer hover:from-primary/30 hover:border-primary/50 transition-all shadow-lg shadow-primary/10"
+          className="mb-6 p-5 bg-gradient-to-r from-primary/20 to-indigo-500/10 border border-primary/30 rounded-2xl flex items-center gap-4 cursor-pointer hover:from-primary/30 hover:border-primary/50 transition-all shadow-lg shadow-primary/10"
           onClick={() => navigate('/agent-subscriptions')}
         >
           <div className="w-12 h-12 bg-primary/20 text-primary rounded-xl flex items-center justify-center shrink-0">
@@ -138,6 +144,44 @@ const AgentDashboard = () => {
           <ChevronRight size={20} className="text-primary shrink-0" />
         </div>
       )}
+
+      {/* ── Daily Generator Tasks Alert (7 AM logic) ────────────────────────── */}
+      {new Date().getHours() >= 7 && pendingGenReadings > 0 && (
+        <div
+          className="mb-8 p-5 bg-gradient-to-r from-warning/20 to-orange-500/10 border border-warning/30 rounded-2xl flex items-center gap-4 cursor-pointer hover:from-warning/30 hover:border-warning/50 transition-all shadow-lg shadow-warning/10"
+          onClick={() => navigate('/agent-daily-report')}
+        >
+          <div className="w-12 h-12 bg-warning/20 text-warning rounded-xl flex items-center justify-center shrink-0">
+            <Clock size={24} />
+          </div>
+          <div className="flex-1">
+            <p className="text-white font-bold text-lg">{pendingGenReadings} Generator Report{pendingGenReadings !== 1 ? 's' : ''} Due Today!</p>
+            <p className="text-sm text-slate-300">Daily generator status readings must be submitted after 7:00 AM.</p>
+          </div>
+          <ChevronRight size={20} className="text-warning shrink-0" />
+        </div>
+      )}
+
+      {/* ── Rent Collection Section ───────────────────────────────────────────── */}
+      <div className="mb-10">
+        <h2 className="text-xl font-bold text-white mb-4 flex items-center">
+          <CheckCircle2 className="me-2 text-blue-500" size={24} /> Rent Collection
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="glass-card p-6 border-l-4 border-blue-500 shadow-lg hover:shadow-blue-500/20 transition-all">
+            <h3 className="text-slate-400 text-sm font-bold uppercase mb-2">Collection Target</h3>
+            <p className="text-3xl font-extrabold text-white">${isLoading ? '...' : rentTarget}</p>
+          </div>
+          <div className="glass-card p-6 border-l-4 border-success shadow-lg hover:shadow-success/20 transition-all">
+            <h3 className="text-slate-400 text-sm font-bold uppercase mb-2">Collected Today</h3>
+            <p className="text-3xl font-extrabold text-white">${isLoading ? '...' : rentCollected}</p>
+          </div>
+          <div className="glass-card p-6 border-l-4 border-warning shadow-lg hover:shadow-warning/20 transition-all">
+            <h3 className="text-slate-400 text-sm font-bold uppercase mb-2">Remaining</h3>
+            <p className="text-3xl font-extrabold text-white">${isLoading ? '...' : rentRemaining}</p>
+          </div>
+        </div>
+      </div>
 
       {/* ── Generator Section ─────────────────────────────────────────────────── */}
       <div className="mb-10">
@@ -196,11 +240,13 @@ const AgentDashboard = () => {
       {/* ── Quick Actions ─────────────────────────────────────────────────────── */}
       <div>
         <h2 className="text-xl font-bold text-white mb-4">Quick Actions</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: 'Subscription Tasks', icon: Zap, path: '/agent-subscriptions', color: 'from-primary/20 to-indigo-600/10 border-primary/30 hover:border-primary/60', iconColor: 'text-primary', badge: pendingSubTasks },
-            { label: 'Generator Readings', icon: Zap, path: '/agent-generators', color: 'from-warning/20 to-yellow-600/10 border-warning/30 hover:border-warning/60', iconColor: 'text-warning' },
-            { label: 'Apartment Readings', icon: Home, path: '/agent-apartments', color: 'from-sky-500/20 to-blue-600/10 border-sky-500/30 hover:border-sky-500/60', iconColor: 'text-sky-400' },
+            { label: 'Rent Collection',    icon: CheckCircle2, path: '/agent-rent-collection',  color: 'from-blue-500/20 to-indigo-600/10 border-blue-500/30 hover:border-blue-500/60', iconColor: 'text-blue-400', badge: rentTasksDue },
+            { label: 'Pending Tasks',      icon: CheckCircle2, path: '/agent-subscriptions',    color: 'from-primary/20 to-indigo-600/10 border-primary/30 hover:border-primary/60',         iconColor: 'text-primary',    badge: pendingSubTasks },
+            { label: 'Generator Readings', icon: Zap,          path: '/agent-generators',        color: 'from-warning/20 to-yellow-600/10 border-warning/30 hover:border-warning/60',         iconColor: 'text-warning' },
+            { label: 'Apartment Readings', icon: Home,         path: '/agent-apartments',        color: 'from-sky-500/20 to-blue-600/10 border-sky-500/30 hover:border-sky-500/60',           iconColor: 'text-sky-400' },
+            { label: 'Apartment Purchases',icon: ShoppingCart, path: '/agent-apartment-costs',  color: 'from-emerald-500/20 to-teal-600/10 border-emerald-500/30 hover:border-emerald-500/60', iconColor: 'text-emerald-400' },
           ].map(item => {
             const Icon = item.icon;
             return (

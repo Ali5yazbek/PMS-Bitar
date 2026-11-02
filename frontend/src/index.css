@@ -24,6 +24,9 @@
       -webkit-text-fill-color: white !important;
       transition: background-color 5000s ease-in-out 0s;
   }
+  .print-only {
+    display: none !important;
+  }
 }
 
 @layer utilities {
@@ -53,20 +56,49 @@
 }
 
 @media print {
-  * {
+  @page {
+    margin: 1.5cm;
+    size: A4;
+  }
+
+  /* ── Universal print reset: force black text on white ── */
+  *,
+  *::before,
+  *::after {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
-  }
-  body, html, #root {
-    background-color: white !important;
     color: black !important;
-    height: auto !important;
-    overflow: visible !important;
+    background-color: white !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
   }
-  .no-print {
+
+  /* ── Hide all interactive / decorative UI ── */
+  .no-print,
+  nav,
+  aside,
+  .glass-sidebar,
+  .glass-panel {
     display: none !important;
   }
-  .print-only {
-    display: block !important;
+
+  /* ── Prevent widows and orphans across page breaks ── */
+  tr, td, th {
+    break-inside: avoid !important;
+  }
+
+  /* ── Ensure tables render cleanly ── */
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+  th, td {
+    border-bottom: 1px solid #d1d5db !important;
+    padding: 8px 12px !important;
+  }
+  thead tr {
+    border-bottom: 2px solid #111827 !important;
   }
 }
+

@@ -25,6 +25,7 @@ class ApartmentCostController {
             JOIN apartments a ON c.apartment_id = a.id
             JOIN buildings b ON a.building_id = b.id
             WHERE c.date >= ? AND c.date <= ?
+              AND (c.status IS NULL OR c.status = 'Accepted')
         ";
         $params1 = [$startDate, $endDate];
         if (!empty($search)) {
@@ -102,10 +103,10 @@ class ApartmentCostController {
         $stmt = $this->db->prepare("
             SELECT a.id, a.code, b.name as building_name,
             (
-                COALESCE((SELECT SUM(amount) FROM apartment_cost_deployments WHERE apartment_id = a.id AND MONTH(date) = MONTH(CURRENT_DATE()) AND YEAR(date) = YEAR(CURRENT_DATE())), 0) +
-                COALESCE((SELECT SUM(amount) FROM expenses WHERE entity_type = 'Apartment' AND entity_id = a.id AND MONTH(date) = MONTH(CURRENT_DATE()) AND YEAR(date) = YEAR(CURRENT_DATE())), 0) +
-                COALESCE((SELECT SUM(total) FROM apartment_expenses WHERE apartment_id = a.id AND MONTH(date) = MONTH(CURRENT_DATE()) AND YEAR(date) = YEAR(CURRENT_DATE())), 0)
-            ) as current_month_cost
+                COALESCE((SELECT SUM(amount) FROM apartment_cost_deployments WHERE apartment_id = a.id AND (status IS NULL OR status = 'Accepted')), 0) +
+                COALESCE((SELECT SUM(amount) FROM expenses WHERE entity_type = 'Apartment' AND entity_id = a.id), 0) +
+                COALESCE((SELECT SUM(total) FROM apartment_expenses WHERE apartment_id = a.id), 0)
+            ) as total_cost
             FROM apartments a
             JOIN buildings b ON a.building_id = b.id
             WHERE a.building_id = ?
@@ -125,7 +126,7 @@ class ApartmentCostController {
         $stmt1 = $this->db->prepare("
             SELECT id, supplier_name, amount, date, notes, receipt_image, 'Deployment' as type
             FROM apartment_cost_deployments
-            WHERE apartment_id = ?
+            WHERE apartment_id = ? AND (status IS NULL OR status = 'Accepted')
         ");
         $stmt1->execute([$apartment_id]);
         $deployments = $stmt1->fetchAll(PDO::FETCH_ASSOC);
@@ -161,6 +162,59 @@ class ApartmentCostController {
             $allCosts[] = $ae;
         }
 
+        // 4. Fetch matching agent_purchases by apartment code & building name
+        $aptInfoStmt = $this->db->prepare("
+            SELECT a.code as apartment_code, b.name as building_name 
+            FROM apartments a 
+            JOIN buildings b ON a.building_id = b.id 
+            WHERE a.id = ?
+        ");
+        $aptInfoStmt->execute([$apartment_id]);
+        $aptInfo = $aptInfoStmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($aptInfo) {
+            $this->db->exec("CREATE TABLE IF NOT EXISTS agent_purchases (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                building_name VARCHAR(100) DEFAULT 'Galaxy',
+                apartment_number VARCHAR(50) DEFAULT 'A1',
+                supplier VARCHAR(100) NOT NULL,
+                amount VARCHAR(50) NOT NULL,
+                items VARCHAR(255) DEFAULT 'General Material',
+                notes TEXT,
+                status VARCHAR(50) DEFAULT 'Pending Review',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )");
+
+            $stmt4 = $this->db->prepare("
+                SELECT id, supplier as supplier_name, amount, DATE(created_at) as date, CONCAT('Items: ', items, ' • ', COALESCE(notes, '')) as notes, NULL as receipt_image, 'Agent Purchase' as type
+                FROM agent_purchases
+                WHERE (building_name LIKE ? OR building_name LIKE ?) 
+                  AND (apartment_number LIKE ? OR apartment_number LIKE ?)
+                  AND status = 'Accepted'
+            ");
+            $bName = $aptInfo['building_name'];
+            $aCode = $aptInfo['apartment_code'];
+            $stmt4->execute(["%$bName%", "$bName%", "%$aCode%", "$aCode%"]);
+            $agentPurchases = $stmt4->fetchAll(PDO::FETCH_ASSOC);
+
+            // Keep track of suppliers & dates to prevent duplication if inserted in step 1
+            $existingKeys = [];
+            foreach ($allCosts as $c) {
+                $existingKeys[] = ($c['supplier_name'] ?? '') . '_' . (float)($c['amount'] ?? 0);
+            }
+
+            foreach ($agentPurchases as $ap) {
+                $numericVal = is_numeric($ap['amount']) ? (float)$ap['amount'] : (float)preg_replace('/[^0-9.]/', '', $ap['amount']);
+                $key = ($ap['supplier_name'] ?? '') . '_' . $numericVal;
+                if (!in_array($key, $existingKeys)) {
+                    $ap['id'] = 'ap_' . $ap['id'];
+                    $ap['amount'] = $numericVal;
+                    $allCosts[] = $ap;
+                }
+            }
+        }
+
         // Sort by date DESC
         usort($allCosts, function($a, $b) {
             return strtotime($b['date']) - strtotime($a['date']);
@@ -180,7 +234,7 @@ class ApartmentCostController {
         $stmt2->execute([$apartment_id]);
         $cost2 = (float)$stmt2->fetchColumn();
 
-        $stmt3 = $this->db->prepare("SELECT COALESCE(SUM(amount), 0) FROM apartment_cost_deployments WHERE apartment_id = ?");
+        $stmt3 = $this->db->prepare("SELECT COALESCE(SUM(amount), 0) FROM apartment_cost_deployments WHERE apartment_id = ? AND (status IS NULL OR status = 'Accepted')");
         $stmt3->execute([$apartment_id]);
         $cost3 = (float)$stmt3->fetchColumn();
 

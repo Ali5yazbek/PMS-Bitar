@@ -12,6 +12,7 @@ const Users = () => {
   
   const [formData, setFormData] = useState({
     name: '',
+    username: '',
     email: '',
     password: '',
     role: 'cashier',
@@ -70,6 +71,7 @@ const Users = () => {
       setEditingUser(user);
       setFormData({
         name: user.name,
+        username: user.username || '',
         email: user.email,
         password: '', // Don't populate password
         role: user.role,
@@ -80,6 +82,7 @@ const Users = () => {
       setEditingUser(null);
       setFormData({
         name: '',
+        username: '',
         email: '',
         password: '',
         role: 'cashier',
@@ -223,6 +226,19 @@ const Users = () => {
                     onChange={(e) => setFormData({...formData, name: e.target.value})}
                     className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-primary transition-colors"
                     placeholder="e.g. John Doe"
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-muted mb-1">Username</label>
+                  <input
+                    type="text"
+                    value={formData.username}
+                    onChange={(e) => setFormData({...formData, username: e.target.value})}
+                    className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-primary transition-colors"
+                    placeholder="e.g. johndoe"
+                    autoComplete="off"
                   />
                 </div>
                 
@@ -235,6 +251,7 @@ const Users = () => {
                     onChange={(e) => setFormData({...formData, email: e.target.value})}
                     className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-primary transition-colors"
                     placeholder="john@example.com"
+                    autoComplete="off"
                   />
                 </div>
                 
@@ -249,6 +266,7 @@ const Users = () => {
                     onChange={(e) => setFormData({...formData, password: e.target.value})}
                     className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-primary transition-colors"
                     placeholder="••••••••"
+                    autoComplete="new-password"
                   />
                 </div>
 

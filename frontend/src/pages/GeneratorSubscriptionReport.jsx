@@ -6,10 +6,12 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import api from '../api/axios';
 import ApartmentInvoicesModal from './ApartmentInvoicesModal';
+import { useCurrency } from '../contexts/CurrencyContext';
 
 const GeneratorSubscriptionReport = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { formatAmount } = useCurrency();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedBuildings, setExpandedBuildings] = useState({});
@@ -217,7 +219,7 @@ const GeneratorSubscriptionReport = () => {
   };
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
+    return formatAmount(amount || 0);
   };
 
   if (loading && !data) {
@@ -398,7 +400,7 @@ const GeneratorSubscriptionReport = () => {
                       </thead>
                       <tbody className="divide-y divide-gray-100 text-sm">
                         {building.apartments.map((apt) => (
-                          <tr key={apt.id} className="hover:bg-gray-50/50 transition-colors">
+                          <tr key={apt.id} className="hover:bg-gray-50/50 transition-colors print:break-inside-avoid">
                             <td className="px-6 py-4">
                               <div className="font-medium text-gray-800">{apt.name}</div>
                               {apt.days_remaining !== null && apt.days_remaining <= 7 && (
@@ -413,10 +415,10 @@ const GeneratorSubscriptionReport = () => {
                             <td className="px-6 py-4 text-right font-medium text-gray-800">
                               {formatCurrency(apt.total_income)}
                             </td>
-                            <td className="px-6 py-4 text-right text-emerald-600">
+                            <td className="px-6 py-4 text-right text-emerald-600 print:text-black">
                               {formatCurrency(apt.total_received)}
                             </td>
-                            <td className="px-6 py-4 text-right text-rose-600 font-medium">
+                            <td className="px-6 py-4 text-right text-rose-600 font-medium print:text-black">
                               {formatCurrency(apt.total_remaining)}
                             </td>
                             <td className="px-6 py-4 text-right print:hidden">

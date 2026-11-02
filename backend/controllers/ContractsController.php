@@ -55,12 +55,23 @@ class ContractsController {
                 throw new Exception("Apartment not found");
             }
 
+            // RBAC: Agents cannot create contracts for Terminated tenants
+            $tStmt = $this->db->prepare("SELECT status FROM tenants WHERE id = ?");
+            $tStmt->execute([$data['tenant_id']]);
+            $tRecord = $tStmt->fetch();
+            if ($tRecord && $tRecord['status'] === 'Terminated' && isset($currentUser['role']) && $currentUser['role'] === 'agent') {
+                throw new Exception("Agents are not authorized to create contracts for Terminated tenants.");
+            }
+
             $monthly_rent = !empty($data['monthly_rent']) ? $data['monthly_rent'] : $apartment['monthly_rent'];
             $monthly_insurance = !empty($data['monthly_insurance']) ? $data['monthly_insurance'] : $apartment['monthly_insurance'];
 
+            $rent_start = !empty($data['rent_start_date']) ? $data['rent_start_date'] : $data['start_date'];
+            $rent_end = !empty($data['rent_end_date']) ? $data['rent_end_date'] : $data['end_date'];
+
             $stmt = $this->db->prepare("
-                INSERT INTO contracts (apartment_id, tenant_id, start_date, end_date, monthly_rent, monthly_insurance, payment_terms, status, payment_method_rule) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
+                INSERT INTO contracts (apartment_id, tenant_id, start_date, end_date, rent_start_date, rent_end_date, monthly_rent, monthly_insurance, payment_terms, status, payment_method_rule) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
             ");
             
             $stmt->execute([
@@ -68,6 +79,8 @@ class ContractsController {
                 $data['tenant_id'], 
                 $data['start_date'], 
                 $data['end_date'],
+                $rent_start,
+                $rent_end,
                 $monthly_rent,
                 $monthly_insurance,
                 $data['payment_terms'] ?? '',
@@ -163,7 +176,7 @@ class ContractsController {
                 $stmtInv->execute([$id]);
                 
                 $cycleEnd = null;
-                $currentPeriodStart = new DateTime($contract['start_date']);
+                $currentPeriodStart = new DateTime($contract['rent_start_date'] ?? $contract['start_date']);
                 
                 if (!$stmtInv->fetch()) {
                     $monthly_rent = $contract['monthly_rent'];
@@ -205,7 +218,7 @@ class ContractsController {
                         $contract['tenant_id'],
                         $contract['apartment_id'],
                         $id,
-                        $contract['start_date'],
+                        $contract['rent_start_date'] ?? $contract['start_date'],
                         $contract['monthly_rent'],
                         $nextBillingDate->format('Y-m-d')
                     ]);
@@ -252,9 +265,17 @@ class ContractsController {
                 throw new Exception("Contract not found");
             }
 
+            $rent_start = !empty($data['rent_start_date']) ? $data['rent_start_date'] : $data['start_date'];
+            $rent_end = !empty($data['rent_end_date']) ? $data['rent_end_date'] : $data['end_date'];
+
+            $newStatus = $contract['status'];
+            if ($newStatus === 'Expired' && strtotime($data['end_date']) >= strtotime('today')) {
+                $newStatus = 'Active';
+            }
+
             $stmtUpdate = $this->db->prepare("
                 UPDATE contracts 
-                SET monthly_rent = ?, monthly_insurance = ?, start_date = ?, end_date = ?, payment_terms = ?, payment_method_rule = ?
+                SET monthly_rent = ?, monthly_insurance = ?, start_date = ?, end_date = ?, rent_start_date = ?, rent_end_date = ?, payment_terms = ?, payment_method_rule = ?, status = ?
                 WHERE id = ?
             ");
             $stmtUpdate->execute([
@@ -262,8 +283,11 @@ class ContractsController {
                 $data['monthly_insurance'],
                 $data['start_date'],
                 $data['end_date'],
+                $rent_start,
+                $rent_end,
                 $data['payment_terms'],
                 $data['payment_method_rule'] ?? 'Any Method',
+                $newStatus,
                 $id
             ]);
 
@@ -303,12 +327,14 @@ class ContractsController {
             $endDate = !empty($data['end_date']) ? $data['end_date'] : date('Y-m-d', strtotime($startDate . ' + 30 days'));
 
             $stmtInsert = $this->db->prepare("
-                INSERT INTO contracts (apartment_id, tenant_id, start_date, end_date, monthly_rent, monthly_insurance, payment_terms, status, manager_approval_date) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', NOW())
+                INSERT INTO contracts (apartment_id, tenant_id, start_date, end_date, rent_start_date, rent_end_date, monthly_rent, monthly_insurance, payment_terms, status, manager_approval_date) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', NOW())
             ");
             $stmtInsert->execute([
                 $oldContract['apartment_id'],
                 $oldContract['tenant_id'],
+                $startDate,
+                $endDate,
                 $startDate,
                 $endDate,
                 $oldContract['monthly_rent'],
@@ -368,84 +394,59 @@ class ContractsController {
         }
     }
 
-    public function generateMissingRent($id) {
-        AuthMiddleware::requireLogin();
+    // Router alias — index.php calls 'generateMissingRent'
+    public function generateMissingRent($id) { return $this->generateRent($id); }
+
+    public function generateRent($id) {
+        $currentUser = AuthMiddleware::requireLogin();
+        require_once __DIR__ . '/../services/RentGenerationService.php';
         
-        $stmt = $this->db->prepare("SELECT * FROM contracts WHERE id = ?");
-        $stmt->execute([$id]);
-        $contract = $stmt->fetch();
-
-        if (!$contract || !$contract['start_date'] || !$contract['end_date']) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Invalid contract or missing dates']);
-            return;
-        }
-
-        $generated = 0;
-        $currentPeriodStart = new DateTime($contract['start_date']);
-        $endDate = new DateTime($contract['end_date']);
-        
-        while ($currentPeriodStart < $endDate) {
-            $cycleEnd = clone $currentPeriodStart;
-            $cycleEnd->modify('+1 month');
-            
-            if ($cycleEnd > $endDate) {
-                $cycleEnd = clone $endDate;
-            }
-
-            $month = $currentPeriodStart->format('m');
-            $year = $currentPeriodStart->format('Y');
-            $due_date = $cycleEnd->format('Y-m-d');
-
-            $stmt = $this->db->prepare("SELECT COUNT(*) FROM rent_invoices WHERE contract_id = ? AND due_date = ?");
-            $stmt->execute([$contract['id'], $due_date]);
-            
-            if ($stmt->fetchColumn() == 0) {
-                $invoice_num = 'INV-' . $year . $month . '-' . $contract['id'];
-                $insert = $this->db->prepare("INSERT INTO rent_invoices (contract_id, invoice_number, amount, due_date, status) VALUES (?, ?, ?, ?, 'Unpaid')");
-                $insert->execute([$contract['id'], $invoice_num, $contract['monthly_rent'], $due_date]);
-                $generated++;
-            }
-            
-            $currentPeriodStart->modify('+1 month');
-        }
-
-        if ($generated > 0) {
-            AuditLogger::log('CREATE', 'RentInvoice', null, "Auto-generated $generated missing invoices for contract $id");
-        }
-        
-        echo json_encode(['message' => "$generated missing month(s) of rent generated successfully!"]);
-    }
-
-    public function delete($id) {
-        $user = AuthMiddleware::requireLogin();
-        if (!in_array($user['role'], ['admin', 'manager'])) {
-            http_response_code(403);
-            echo json_encode(['error' => 'Unauthorized']);
-            return;
-        }
-
         try {
-            $this->db->beginTransaction();
-            
-            // Delete contract and its dependencies (assuming foreign keys or manual delete)
-            $stmt = $this->db->prepare("DELETE FROM rent_invoices WHERE contract_id = ?");
-            $stmt->execute([$id]);
+            // First run due generation for this contract up to today
+            $result = RentGenerationService::generateDueInvoices((int)$id);
 
-            $stmt = $this->db->prepare("DELETE FROM insurance_accounts WHERE contract_id = ?");
-            $stmt->execute([$id]);
-            
-            $stmt = $this->db->prepare("DELETE FROM contracts WHERE id = ?");
-            $stmt->execute([$id]);
+            // If no invoices were generated because next_billing_date is in the future,
+            // generate the upcoming cycle on demand
+            if ($result['invoices_created'] === 0) {
+                $stmt = $this->db->prepare("
+                    SELECT rp.next_billing_date 
+                    FROM rent_profiles rp 
+                    WHERE rp.contract_id = ?
+                ");
+                $stmt->execute([$id]);
+                $nextDate = $stmt->fetchColumn();
+                if ($nextDate) {
+                    $result = RentGenerationService::generateDueInvoices((int)$id, new DateTime($nextDate));
+                }
+            }
 
-            $this->db->commit();
-            AuditLogger::log('DELETE', 'Contract', $id, "Deleted contract $id");
-            
-            echo json_encode(['message' => 'Contract deleted successfully']);
+            if (!empty($result['errors'])) {
+                throw new Exception($result['errors'][0]['error'] ?? 'Error generating rent');
+            }
+
+            // Fetch current updated next billing date
+            $stmt = $this->db->prepare("
+                SELECT rp.next_billing_date 
+                FROM rent_profiles rp 
+                WHERE rp.contract_id = ?
+            ");
+            $stmt->execute([$id]);
+            $newBillingDate = $stmt->fetchColumn();
+
+            echo json_encode([
+                'success'           => true,
+                'message'           => 'Next month rent generated successfully!',
+                'invoices_created'  => $result['invoices_created'],
+                'next_billing_date' => $newBillingDate,
+                'details'           => $result['details']
+            ]);
+
         } catch (Exception $e) {
-            $this->db->rollBack();
-            http_response_code(500);
-            echo json_encode(['error' => $e->getMessage()]);
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'error'   => $e->getMessage()
+            ]);
         }
     }
 
@@ -453,25 +454,53 @@ class ContractsController {
 
     public function pauseRent($id) {
         $user = AuthMiddleware::requireLogin();
+        if (!in_array($user['role'], ['admin', 'manager'])) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            return;
+        }
         try {
+            $this->db->beginTransaction();
             $stmt = $this->db->prepare("UPDATE contracts SET rent_status = 'Paused' WHERE id = ?");
             $stmt->execute([$id]);
+            
+            $stmtProf = $this->db->prepare("UPDATE rent_profiles SET status = 'Paused' WHERE contract_id = ?");
+            $stmtProf->execute([$id]);
+
+            $this->db->commit();
             AuditLogger::log('UPDATE', 'Contract', $id, "Paused rent for contract $id");
             echo json_encode(['message' => 'Rent paused successfully']);
         } catch (Exception $e) {
+            $this->db->rollBack();
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }
     }
 
     public function endRent($id) {
+        return $this->closeRent($id);
+    }
+
+    public function closeRent($id) {
         $user = AuthMiddleware::requireLogin();
+        if (!in_array($user['role'], ['admin', 'manager'])) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            return;
+        }
         try {
-            $stmt = $this->db->prepare("UPDATE contracts SET rent_status = 'Ended' WHERE id = ?");
+            $this->db->beginTransaction();
+            $stmt = $this->db->prepare("UPDATE contracts SET rent_status = 'Closed' WHERE id = ?");
             $stmt->execute([$id]);
-            AuditLogger::log('UPDATE', 'Contract', $id, "Ended rent for contract $id");
-            echo json_encode(['message' => 'Rent ended successfully']);
+
+            $stmtProf = $this->db->prepare("UPDATE rent_profiles SET status = 'Closed' WHERE contract_id = ?");
+            $stmtProf->execute([$id]);
+
+            $this->db->commit();
+            AuditLogger::log('UPDATE', 'Contract', $id, "Closed rent for contract $id");
+            echo json_encode(['message' => 'Rent closed successfully']);
         } catch (Exception $e) {
+            $this->db->rollBack();
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -480,11 +509,20 @@ class ContractsController {
     public function resumeRent($id) {
         $user = AuthMiddleware::requireLogin();
         try {
+            $this->db->beginTransaction();
+
+            // Resume both the contract AND the rent profile
             $stmt = $this->db->prepare("UPDATE contracts SET rent_status = 'Active' WHERE id = ?");
             $stmt->execute([$id]);
+
+            $stmtProf = $this->db->prepare("UPDATE rent_profiles SET status = 'Active' WHERE contract_id = ?");
+            $stmtProf->execute([$id]);
+
+            $this->db->commit();
             AuditLogger::log('UPDATE', 'Contract', $id, "Resumed rent for contract $id");
             echo json_encode(['message' => 'Rent resumed successfully']);
         } catch (Exception $e) {
+            $this->db->rollBack();
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -532,6 +570,63 @@ class ContractsController {
             AuditLogger::log('UPDATE', 'Contract', $id, "Manually renewed rent for contract $id");
             echo json_encode(['message' => 'Rent renewed for another month successfully']);
         } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+    }
+
+    public function uploadFile($id) {
+        $user = AuthMiddleware::requireLogin();
+        
+        try {
+            $this->db->beginTransaction();
+
+            $stmt = $this->db->prepare("SELECT * FROM contracts WHERE id = ?");
+            $stmt->execute([$id]);
+            $contract = $stmt->fetch();
+
+            if (!$contract) {
+                throw new Exception("Contract not found");
+            }
+
+            if (!isset($_FILES['contract_file']) || $_FILES['contract_file']['error'] !== UPLOAD_ERR_OK) {
+                throw new Exception("No valid file uploaded.");
+            }
+
+            $fileTmpPath = $_FILES['contract_file']['tmp_name'];
+            $fileName = $_FILES['contract_file']['name'];
+            $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+            
+            $allowedExtensions = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'];
+            if (!in_array($fileExtension, $allowedExtensions)) {
+                throw new Exception("Invalid file extension.");
+            }
+
+            $uploadDir = __DIR__ . '/../uploads/contracts/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+
+            $newFileName = 'contract_' . $id . '_' . time() . '.' . $fileExtension;
+            $destination = $uploadDir . $newFileName;
+
+            if (move_uploaded_file($fileTmpPath, $destination)) {
+                $dbPath = 'uploads/contracts/' . $newFileName;
+
+                $stmtUpdate = $this->db->prepare("UPDATE contracts SET contract_file = ? WHERE id = ?");
+                $stmtUpdate->execute([$dbPath, $id]);
+
+                $this->db->commit();
+                AuditLogger::log('UPDATE', 'Contract', $id, "Uploaded contract file");
+                
+                echo json_encode(['message' => 'Contract file uploaded successfully', 'file_path' => $dbPath]);
+            } else {
+                throw new Exception("Failed to move uploaded file.");
+            }
+        } catch (Exception $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }

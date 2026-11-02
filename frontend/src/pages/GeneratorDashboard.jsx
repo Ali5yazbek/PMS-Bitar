@@ -3,13 +3,19 @@ import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../api/axios';
-import { ArrowLeft, Battery, Droplet, Activity, Calendar, Clock, Plus, Settings, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Battery, Droplet, Activity, Calendar, Clock, Plus, Settings, AlertTriangle, Edit2, Trash2 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
   LineChart, Line
 } from 'recharts';
-
+import { FileSpreadsheet } from 'lucide-react';
 import Tesseract from 'tesseract.js';
+// --- New AI Generator Components ---
+import AddDailyLogModal from '../components/generators/AddDailyLogModal';
+import AIAnalysisModal from '../components/generators/AIAnalysisModal';
+import AiLogsTableBody from '../components/generators/AiLogsTableBody';
+import { generatorApi } from '../api/generatorApi';
+import { useEffect } from 'react'; // ensure useEffect is imported
 
 const GeneratorDashboard = () => {
   const { t } = useTranslation();
@@ -22,10 +28,17 @@ const GeneratorDashboard = () => {
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [verifyForm, setVerifyForm] = useState({ report_id: '', actual_fuel_remaining: '' });
   const [activeTab, setActiveTab] = useState('Overview');
+  
+  // --- New AI State ---
+  const [isAddDailyLogOpen, setIsAddDailyLogOpen] = useState(false);
+  const [isAIAnalysisOpen, setIsAIAnalysisOpen] = useState(false);
+  const [selectedAIAnalysis, setSelectedAIAnalysis] = useState(null);
+  const [analyzingId, setAnalyzingId] = useState(null);
+
   const [generatorForm, setGeneratorForm] = useState({
     name: '', fuel_capacity: '', capacity_kva: '', price_per_kw: '',
     model: '', serial_number: '', expected_fuel_consumption_per_hour: '', 
-    expected_fuel_consumption_per_kwh: '', maintenance_interval_hours: 250, min_fuel_level_alert: 100,
+    expected_fuel_consumption_per_kwh: '', maintenance_interval_hours: 250, last_maintenance_hours: 0, min_fuel_level_alert: 100,
     current_fuel: '', current_meter_reading: '', current_engine_hours: ''
   });
   const [ocrLoading, setOcrLoading] = useState(false);
@@ -49,14 +62,74 @@ const GeneratorDashboard = () => {
     receipt: null
   });
 
-  const { data: fuelMovements, isLoading: fuelLoading } = useQuery({
-    queryKey: ['fuelMovements', id],
-    queryFn: async () => {
-      const res = await api.get(`/fuel/generators/${id}/movements`);
-      return res.data;
-    },
-    enabled: activeTab === 'Fuel'
+  const [exportStartDate, setExportStartDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
   });
+  const [exportEndDate, setExportEndDate] = useState(() => {
+    const d = new Date();
+    return d.toISOString().split('T')[0];
+  });
+  const [exportGeneratorId, setExportGeneratorId] = useState('');
+  
+  const [aiLogsDate, setAiLogsDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+
+  const { data: allGeneratorsData } = useQuery({
+    queryKey: ['allGeneratorsForExport'],
+    queryFn: async () => {
+      const res = await api.get('/energy/executive-dashboard');
+      return res.data?.generators || [];
+    },
+    enabled: activeTab === 'Export'
+  });
+
+  const handleExport = async () => {
+      if (!exportStartDate || !exportEndDate) {
+          alert("Please select a valid date range first.");
+          return;
+      }
+      
+      let url = `${api.defaults.baseURL}/generator/export?start_date=${exportStartDate}&end_date=${exportEndDate}`;
+      if (exportGeneratorId) {
+          url += `&generator_id=${exportGeneratorId}`;
+      }
+      
+      try {
+          const response = await fetch(url);
+          if (!response.ok) {
+              const errData = await response.json().catch(() => ({}));
+              throw new Error(errData.error || 'Export failed');
+          }
+          
+          const blob = await response.blob();
+          const downloadUrl = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = downloadUrl;
+          
+          // Get filename from header if available
+          let filename = `export_${exportStartDate}_to_${exportEndDate}.xls`;
+          const disposition = response.headers.get('Content-Disposition');
+          if (disposition && disposition.indexOf('attachment') !== -1) {
+              const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+              const matches = filenameRegex.exec(disposition);
+              if (matches != null && matches[1]) { 
+                  filename = matches[1].replace(/['"]/g, '');
+              }
+          }
+          
+          link.setAttribute('download', filename);
+          document.body.appendChild(link);
+          link.click();
+          link.parentNode.removeChild(link);
+          window.URL.revokeObjectURL(downloadUrl);
+      } catch (err) {
+          console.error(err);
+          alert("Could not generate report: " + err.message + "\nMake sure the AI backend is running on port 8000 on the server.");
+      }
+  };
 
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ['generatorStats', id],
@@ -65,6 +138,15 @@ const GeneratorDashboard = () => {
       return res.data;
     },
     retry: false
+  });
+
+  const { data: fuelMovements, isLoading: fuelLoading } = useQuery({
+    queryKey: ['fuelMovements', stats?.generator?.id],
+    queryFn: async () => {
+      const res = await api.get(`/fuel/generators/${stats.generator.id}/movements`);
+      return res.data;
+    },
+    enabled: !!stats?.generator?.id && activeTab === 'Fuel'
   });
 
   const { data: reports } = useQuery({
@@ -128,21 +210,33 @@ const GeneratorDashboard = () => {
 
   const fuelMutation = useMutation({
     mutationFn: (data) => {
-      const formData = new FormData();
-      formData.append('generator_id', stats?.generator?.id || id);
-      Object.keys(data).forEach(key => {
-        if (data[key] !== null) formData.append(key, data[key]);
-      });
-      return api.post('/fuel/movements', formData);
+      if (data.id) {
+         return api.put(`/fuel/movements/${data.id}`, data);
+      } else {
+        const formData = new FormData();
+        formData.append('generator_id', stats?.generator?.id || id);
+        Object.keys(data).forEach(key => {
+          if (data[key] !== null) formData.append(key, data[key]);
+        });
+        return api.post('/fuel/movements', formData);
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(['fuelMovements', id]);
+      queryClient.invalidateQueries(['fuelMovements', stats?.generator?.id]);
       queryClient.invalidateQueries(['generatorStats', id]);
       setShowFuelModal(false);
       setFuelForm({
         date: new Date().toISOString().split('T')[0],
         type: 'Refill', amount: '', cost_per_liter: '', supplier_id: '', notes: '', receipt: null
       });
+    }
+  });
+
+  const deleteFuelMovementMutation = useMutation({
+    mutationFn: (movementId) => api.delete(`/fuel/movements/${movementId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['fuelMovements', stats?.generator?.id]);
+      queryClient.invalidateQueries(['generatorStats', id]);
     }
   });
 
@@ -154,26 +248,48 @@ const GeneratorDashboard = () => {
     }
   });
 
-  const handlePhotoUpload = (e) => {
+  const handlePhotoUpload = async (e) => {
     const file = e.target.files[0];
     if (file) {
       setReportForm({ ...reportForm, photo: file });
       setOcrLoading(true);
-      Tesseract.recognize(
-        file,
-        'eng',
-        { logger: m => console.log(m) }
-      ).then(({ data: { text } }) => {
-        // Extract numbers from text (simplistic matching)
-        const numbers = text.replace(/[^0-9]/g, '');
-        if (numbers) {
+      
+      try {
+        // 1. Try Professional Tesseract First (Offline, Fast, Free)
+        const { data: { text } } = await Tesseract.recognize(
+          file,
+          'eng',
+          {
+            tessedit_char_whitelist: '0123456789.', // Highly accurate mode for meters
+            logger: m => console.log(m)
+          }
+        );
+        
+        const numbers = text.replace(/[^0-9.]/g, '');
+        
+        if (numbers && numbers.length > 0) {
           setReportForm(prev => ({ ...prev, current_kwh: numbers }));
+          setOcrLoading(false);
+          return; // Success! No need to use Gemini
         }
+        
+        // 2. Fallback to Gemini Vision API if Tesseract fails to see clear numbers
+        console.log("Tesseract couldn't find clear numbers. Falling back to Gemini Vision API...");
+        const formData = new FormData();
+        formData.append('photo', file);
+        
+        const response = await api.post('/generator/extract-meter', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        
+        if (response.data?.status === 'success' && response.data?.extracted_value) {
+          setReportForm(prev => ({ ...prev, current_kwh: response.data.extracted_value }));
+        }
+      } catch (err) {
+        console.error('Failed to extract meter reading:', err);
+      } finally {
         setOcrLoading(false);
-      }).catch(err => {
-        console.error(err);
-        setOcrLoading(false);
-      });
+      }
     }
   };
 
@@ -183,6 +299,47 @@ const GeneratorDashboard = () => {
       setReportForm({ ...reportForm, fuel_photo: file });
     }
   };
+
+  // --- New AI Analysis Handler ---
+  const handleShowAIAnalysis = async (logId) => {
+    setAnalyzingId(logId);
+    try {
+        const response = await generatorApi.runAnalysis(logId);
+        setSelectedAIAnalysis({
+            metrics: response.metrics,
+            ai_report: response.ai_report,
+            logId: logId
+        });
+        setIsAIAnalysisOpen(true);
+    } catch (error) {
+        console.error("AI Analysis failed", error);
+        alert(error.message || "AI Analysis failed. Please try again or check console.");
+    } finally {
+        setAnalyzingId(null);
+    }
+  };
+
+  const handleViewAIAnalysis = (log) => {
+    setSelectedAIAnalysis({
+        metrics: {
+            hours_worked_today: parseFloat(log.calculated_hours_worked || 0),
+            expected_fuel_burn_factory: parseFloat(log.expected_factory_fuel_burn || 0),
+            ml_predicted_fuel_burn: log.ml_predicted_fuel_burn !== null ? parseFloat(log.ml_predicted_fuel_burn) : null,
+            predicted_remaining_fuel: log.predicted_fuel_remaining !== null ? parseFloat(log.predicted_fuel_remaining) : null,
+            actual_fuel_spent: log.actual_fuel_spent !== null && log.actual_fuel_spent !== undefined ? parseFloat(log.actual_fuel_spent) : null, 
+            actual_consumption_rate: log.actual_consumption_rate !== null && log.actual_consumption_rate !== undefined ? parseFloat(log.actual_consumption_rate) : null,
+            missing_fuel_variance: log.missing_fuel_variance !== null && log.missing_fuel_variance !== undefined ? parseFloat(log.missing_fuel_variance) : 0,
+            financial_loss_cfa: log.financial_loss_cfa !== null && log.financial_loss_cfa !== undefined ? parseFloat(log.financial_loss_cfa) : 0,
+            anomaly_detected: log.status_flag === 'Anomaly Detected',
+            vol_theft_alert: log.status_flag === 'Anomaly Detected',
+            admin_actual_fuel: log.admin_actual_fuel !== null && log.admin_actual_fuel !== undefined ? parseFloat(log.admin_actual_fuel) : null
+        },
+        ai_report: log.ai_report || "Report data is missing or incomplete.",
+        logId: log.id
+    });
+    setIsAIAnalysisOpen(true);
+  };
+
 
   const openReportModal = () => {
     setReportForm({
@@ -203,6 +360,29 @@ const GeneratorDashboard = () => {
     }
   });
 
+  const updateGeneratorMutation = useMutation({
+    mutationFn: (data) => api.put(`/energy/generators/${data.id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['generatorStats', id]);
+      setShowAddGenerator(false);
+    }
+  });
+
+  const openEditSettings = () => {
+    const g = stats?.generator;
+    if (g) {
+      setGeneratorForm({
+        id: g.id,
+        name: g.name || '', fuel_capacity: g.fuel_capacity || '', capacity_kva: g.capacity_kva || '', price_per_kw: g.price_per_kw || '',
+        model: g.model || '', serial_number: g.serial_number || '', expected_fuel_consumption_per_hour: g.expected_fuel_consumption_per_hour || '', 
+        expected_fuel_consumption_per_kwh: g.expected_fuel_consumption_per_kwh || '', maintenance_interval_hours: g.maintenance_interval_hours || 250, 
+        last_maintenance_hours: g.last_maintenance_hours || 0, min_fuel_level_alert: g.min_fuel_level_alert || 100,
+        current_fuel: g.current_fuel || '', current_meter_reading: g.initial_meter_reading || '', current_engine_hours: g.current_engine_hours || ''
+      });
+      setShowAddGenerator(true);
+    }
+  };
+
   const statusMutation = useMutation({
     mutationFn: (status) => api.put(`/energy/generators/${stats?.generator?.id}/status`, { status }),
     onSuccess: () => queryClient.invalidateQueries(['generatorStats', id])
@@ -215,6 +395,102 @@ const GeneratorDashboard = () => {
       window.location.reload();
     }
   });
+
+  const renderGeneratorModal = () => (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="glass-card w-full max-w-md p-8 border border-slate-700 shadow-2xl relative animate-in fade-in zoom-in duration-200 text-left">
+        <h2 className="text-2xl font-bold text-white mb-6">{generatorForm.id ? 'Edit Generator Settings' : t('generator.register_title')}</h2>
+        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 hide-scrollbar">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Generator Name</label>
+              <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                placeholder={t('generator.name')}
+                value={generatorForm.name} onChange={e => setGeneratorForm({...generatorForm, name: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Model</label>
+              <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.model} onChange={e => setGeneratorForm({...generatorForm, model: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Serial Number</label>
+              <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.serial_number} onChange={e => setGeneratorForm({...generatorForm, serial_number: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Fuel Tank Capacity (Liters)</label>
+              <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.fuel_capacity} onChange={e => setGeneratorForm({...generatorForm, fuel_capacity: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Initial Fuel Level (Liters)</label>
+              <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.current_fuel} onChange={e => setGeneratorForm({...generatorForm, current_fuel: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-warning mb-1">Initial Fuel Cost (CFA/L)</label>
+              <input type="number" className="w-full bg-warning/10 border border-warning/30 rounded-lg px-4 py-2 text-warning placeholder-warning/50" 
+                placeholder="e.g. 850"
+                value={generatorForm.initial_fuel_cost} onChange={e => setGeneratorForm({...generatorForm, initial_fuel_cost: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-warning mb-1">Initial Meter Reading (kWh)</label>
+              <input type="number" className="w-full bg-warning/10 border border-warning/30 rounded-lg px-4 py-2 text-warning placeholder-warning/50" 
+                placeholder="Current meter state"
+                value={generatorForm.current_meter_reading} onChange={e => setGeneratorForm({...generatorForm, current_meter_reading: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-warning mb-1">Initial Engine Hours (h)</label>
+              <input type="number" step="0.01" className="w-full bg-warning/10 border border-warning/30 rounded-lg px-4 py-2 text-warning placeholder-warning/50" 
+                placeholder="Current hours"
+                value={generatorForm.current_engine_hours} onChange={e => setGeneratorForm({...generatorForm, current_engine_hours: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Capacity (KVA)</label>
+              <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.capacity_kva} onChange={e => setGeneratorForm({...generatorForm, capacity_kva: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Exp. Fuel / Hour (L)</label>
+              <input type="number" step="0.1" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.expected_fuel_consumption_per_hour} onChange={e => setGeneratorForm({...generatorForm, expected_fuel_consumption_per_hour: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Exp. Fuel / KWH (L)</label>
+              <input type="number" step="0.01" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.expected_fuel_consumption_per_kwh} onChange={e => setGeneratorForm({...generatorForm, expected_fuel_consumption_per_kwh: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Maintenance Interval (Hrs)</label>
+              <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.maintenance_interval_hours} onChange={e => setGeneratorForm({...generatorForm, maintenance_interval_hours: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Last Maintenance At (Hrs)</label>
+              <input type="number" step="0.01" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.last_maintenance_hours} onChange={e => setGeneratorForm({...generatorForm, last_maintenance_hours: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-muted mb-1">Min Fuel Alert (Liters)</label>
+              <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
+                value={generatorForm.min_fuel_level_alert} onChange={e => setGeneratorForm({...generatorForm, min_fuel_level_alert: e.target.value})} />
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-slate-700">
+          <button onClick={() => setShowAddGenerator(false)} className="px-6 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors">{t('generator.cancel')}</button>
+          <button 
+            onClick={() => generatorForm.id ? updateGeneratorMutation.mutate(generatorForm) : createGeneratorMutation.mutate(generatorForm)}
+            className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors"
+            disabled={createGeneratorMutation.isLoading || updateGeneratorMutation.isLoading || !generatorForm.name}
+          >
+            {createGeneratorMutation.isLoading || updateGeneratorMutation.isLoading ? 'Saving...' : 'Save Settings'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   if (isLoading) {
     return (
@@ -235,7 +511,15 @@ const GeneratorDashboard = () => {
            <p className="text-muted mb-8 text-center max-w-md">This building does not have a generator registered yet. You need to create a generator record first.</p>
            <div className="flex gap-4">
              <button 
-                onClick={() => setShowAddGenerator(true)}
+                onClick={() => {
+                  setGeneratorForm({
+                    name: '', fuel_capacity: '', capacity_kva: '', price_per_kw: '',
+                    model: '', serial_number: '', expected_fuel_consumption_per_hour: '', 
+                    expected_fuel_consumption_per_kwh: '', maintenance_interval_hours: 250, last_maintenance_hours: 0, min_fuel_level_alert: 100,
+                    current_fuel: '', current_meter_reading: '', current_engine_hours: ''
+                  });
+                  setShowAddGenerator(true);
+                }}
                 className="bg-primary hover:bg-indigo-600 text-white px-6 py-3 rounded-xl transition-colors font-medium flex items-center gap-2 shadow-lg shadow-primary/30"
              >
                 <Plus size={18} /> Register Generator
@@ -249,90 +533,7 @@ const GeneratorDashboard = () => {
            </div>
 
            {/* Add Generator Modal */}
-           {showAddGenerator && (
-             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-               <div className="glass-card w-full max-w-md p-8 border border-slate-700 shadow-2xl relative animate-in fade-in zoom-in duration-200 text-left">
-                 <h2 className="text-2xl font-bold text-white mb-6">{t('generator.register_title')}</h2>
-                 <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 hide-scrollbar">
-                   <div className="grid grid-cols-2 gap-4">
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Generator Name</label>
-                       <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         placeholder={t('generator.name')}
-                         value={generatorForm.name} onChange={e => setGeneratorForm({...generatorForm, name: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Model</label>
-                       <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.model} onChange={e => setGeneratorForm({...generatorForm, model: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Serial Number</label>
-                       <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.serial_number} onChange={e => setGeneratorForm({...generatorForm, serial_number: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Fuel Tank Capacity (Liters)</label>
-                       <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.fuel_capacity} onChange={e => setGeneratorForm({...generatorForm, fuel_capacity: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Initial Fuel Level (Liters)</label>
-                       <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.current_fuel} onChange={e => setGeneratorForm({...generatorForm, current_fuel: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-warning mb-1">Initial Meter Reading (kWh)</label>
-                       <input type="number" className="w-full bg-warning/10 border border-warning/30 rounded-lg px-4 py-2 text-warning placeholder-warning/50" 
-                         placeholder="Current meter state"
-                         value={generatorForm.current_meter_reading} onChange={e => setGeneratorForm({...generatorForm, current_meter_reading: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-warning mb-1">Initial Engine Hours (h)</label>
-                       <input type="number" step="0.01" className="w-full bg-warning/10 border border-warning/30 rounded-lg px-4 py-2 text-warning placeholder-warning/50" 
-                         placeholder="Current hours"
-                         value={generatorForm.current_engine_hours} onChange={e => setGeneratorForm({...generatorForm, current_engine_hours: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Capacity (KVA)</label>
-                       <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.capacity_kva} onChange={e => setGeneratorForm({...generatorForm, capacity_kva: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Exp. Fuel / Hour (L)</label>
-                       <input type="number" step="0.1" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.expected_fuel_consumption_per_hour} onChange={e => setGeneratorForm({...generatorForm, expected_fuel_consumption_per_hour: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Exp. Fuel / KWH (L)</label>
-                       <input type="number" step="0.01" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.expected_fuel_consumption_per_kwh} onChange={e => setGeneratorForm({...generatorForm, expected_fuel_consumption_per_kwh: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Maintenance Interval (Hrs)</label>
-                       <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.maintenance_interval_hours} onChange={e => setGeneratorForm({...generatorForm, maintenance_interval_hours: e.target.value})} />
-                     </div>
-                     <div>
-                       <label className="block text-sm font-medium text-muted mb-1">Min Fuel Alert (Liters)</label>
-                       <input type="number" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white" 
-                         value={generatorForm.min_fuel_level_alert} onChange={e => setGeneratorForm({...generatorForm, min_fuel_level_alert: e.target.value})} />
-                     </div>
-                   </div>
-                 </div>
-                 <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-slate-700">
-                   <button onClick={() => setShowAddGenerator(false)} className="px-6 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors">{t('generator.cancel')}</button>
-                   <button 
-                     onClick={() => createGeneratorMutation.mutate(generatorForm)}
-                     className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors"
-                     disabled={createGeneratorMutation.isLoading || !generatorForm.name}
-                   >
-                     {createGeneratorMutation.isLoading ? 'Saving...' : 'Register'}
-                   </button>
-                 </div>
-               </div>
-             </div>
-           )}
+           {showAddGenerator && renderGeneratorModal()}
 
         </div>
       </div>
@@ -352,7 +553,18 @@ const GeneratorDashboard = () => {
             <ArrowLeft size={20} />
           </button>
           <div>
-            <h1 className="text-3xl font-bold text-white">{generator?.name || t('energy.generator')} Dashboard</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-white">{generator?.name || t('energy.generator')} Dashboard</h1>
+              {generator && (
+                <button 
+                  onClick={openEditSettings}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors"
+                  title="Edit Generator Settings"
+                >
+                  <Settings size={20} />
+                </button>
+              )}
+            </div>
             <div className="flex items-center mt-1 gap-2">
               <span className="text-muted">Status:</span>
               <select 
@@ -385,10 +597,17 @@ const GeneratorDashboard = () => {
           <div className="ml-auto flex gap-3">
             <button 
               onClick={openReportModal}
-              className="bg-primary hover:bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors shadow-lg shadow-primary/30"
+              className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors border border-slate-600"
             >
               <Plus size={20} />
-              <span>{t('energy.add_reading')}</span>
+              <span>{t('energy.add_reading')} (Old)</span>
+            </button>
+            <button 
+              onClick={() => setIsAddDailyLogOpen(true)}
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors shadow-lg shadow-blue-500/30"
+            >
+              <Plus size={20} />
+              <span>Add Daily Log</span>
             </button>
           </div>
         </div>
@@ -407,12 +626,35 @@ const GeneratorDashboard = () => {
           >
             Fuel Management (Enterprise)
           </button>
+          <button 
+            onClick={() => setActiveTab('Export')} 
+            className={`font-medium pb-4 px-2 transition-colors ${activeTab === 'Export' ? 'text-primary border-b-2 border-primary' : 'text-muted hover:text-slate-300'}`}
+          >
+            Export Reports
+          </button>
         </div>
 
         {activeTab === 'Overview' && (
           <>
             {/* Real-time Status Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-6 mb-8">
+          <div className="glass-card p-6 border border-slate-700/50">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-muted font-medium text-sm uppercase tracking-wider">Meter / Hours</h3>
+              <Activity size={18} className="text-purple-400" />
+            </div>
+            <div className="flex justify-between mt-2">
+                <div>
+                   <div className="text-2xl font-bold text-white">{stats?.maintenance?.current_meter || 0}</div>
+                   <div className="text-xs text-muted mt-1">Meter</div>
+                </div>
+                <div className="text-right">
+                   <div className="text-2xl font-bold text-white">{generator?.current_engine_hours || 0}</div>
+                   <div className="text-xs text-muted mt-1">Engine (h)</div>
+                </div>
+            </div>
+          </div>
+
           <div className="glass-card p-6 border border-slate-700/50">
             <div className="flex justify-between items-start mb-4">
               <h3 className="text-muted font-medium text-sm uppercase tracking-wider">{t('generator.current_est')}</h3>
@@ -423,18 +665,23 @@ const GeneratorDashboard = () => {
             {reports && reports.length > 0 && reports[0].status === 'Pending Verification' ? (
               <button 
                 onClick={() => {
-                  setVerifyForm({ report_id: reports[0].id, actual_fuel_remaining: generator?.current_fuel || '' });
+                  setVerifyForm({ report_id: reports[0].id, actual_fuel_remaining: stats?.today?.ai_estimated_remaining || generator?.current_fuel || '' });
                   setShowVerifyModal(true);
                 }}
-                className="w-full text-center bg-blue-500/20 hover:bg-blue-500/40 text-blue-400 text-sm font-medium py-2 rounded-lg transition-colors border border-blue-500/30"
+                className="w-full text-center bg-blue-500/20 hover:bg-blue-500/40 text-blue-400 text-sm font-medium py-2 rounded-lg transition-colors border border-blue-500/30 mb-2"
               >
                 Tell Me Actual Remaining Fuel
               </button>
             ) : (
-              <div className="text-sm text-success text-center py-2 bg-success/10 rounded-lg border border-success/20">
+              <div className="text-sm text-success text-center py-2 bg-success/10 rounded-lg border border-success/20 mb-2">
                 Latest Reading Verified
               </div>
             )}
+            
+            <div className="text-sm text-indigo-300 font-medium flex items-center justify-between">
+               <span>AI Est. Remaining:</span>
+               <span>{stats?.today?.ai_estimated_remaining || 0} L</span>
+            </div>
             
             <div className="w-full bg-slate-800 rounded-full h-1.5 mt-4">
               <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(100, ((generator?.current_fuel || 0) / (generator?.fuel_capacity || 1)) * 100)}%` }}></div>
@@ -451,20 +698,39 @@ const GeneratorDashboard = () => {
 
           <div className="glass-card p-6 border border-slate-700/50">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-muted font-medium text-sm uppercase tracking-wider">{t('generator.kwh_today')}</h3>
-              <Activity size={18} className="text-success" />
+              <h3 className="text-muted font-medium text-sm uppercase tracking-wider">Latest Runtime</h3>
+              <Clock size={18} className="text-success" />
             </div>
-            <div className="text-3xl font-bold text-white">{today?.kwh_produced || 0}</div>
-            <p className="text-sm text-success mt-2">↑ Active</p>
+            <div className="text-3xl font-bold text-white">{stats?.today?.running_hours || 0} <span className="text-lg text-muted font-normal">h</span></div>
+            <p className="text-sm text-muted mt-2">Reading on {stats?.today?.date || 'N/A'}</p>
           </div>
 
           <div className="glass-card p-6 border border-slate-700/50">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-muted font-medium text-sm uppercase tracking-wider">{t('generator.efficiency')}</h3>
-              <Settings size={18} className="text-primary" />
+              <h3 className="text-muted font-medium text-sm uppercase tracking-wider">Latest Fuel Used</h3>
+              <Droplet size={18} className="text-primary" />
             </div>
-            <div className="text-3xl font-bold text-white">{month?.efficiency_score || 0}</div>
-            <p className="text-sm text-muted mt-2">kWh per Liter (Month)</p>
+            <div className="text-3xl font-bold text-white">{stats?.today?.fuel_used || stats?.today?.ai_estimated_used || 0} <span className="text-lg text-muted font-normal">L</span></div>
+            <p className="text-sm text-muted mt-2">Fuel Burned</p>
+          </div>
+
+          <div className="glass-card p-6 border border-slate-700/50 relative overflow-hidden">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-muted font-medium text-sm uppercase tracking-wider">Oil Life</h3>
+              <Settings size={18} className={stats?.maintenance?.health_score < 20 ? 'text-red-500 animate-spin' : 'text-blue-400'} />
+            </div>
+            <div className={`text-3xl font-bold ${stats?.maintenance?.health_score < 20 ? 'text-red-500' : 'text-white'}`}>
+              {stats?.maintenance?.health_score ?? 100}%
+            </div>
+            <div className="text-sm text-slate-300 font-medium flex items-center justify-between mt-2">
+               <span>Status:</span>
+               <span className={stats?.maintenance?.hours_until_maintenance < 0 ? 'text-red-500 font-bold' : stats?.maintenance?.hours_until_maintenance < 50 ? 'text-amber-400 font-bold' : ''}>
+                 {stats?.maintenance?.hours_until_maintenance < 0 ? `Overdue by ${Math.abs(stats?.maintenance?.hours_until_maintenance)} h` : `In ${stats?.maintenance?.hours_until_maintenance ?? 250} h`}
+               </span>
+            </div>
+            <div className="w-full bg-slate-800 rounded-full h-1.5 mt-4">
+              <div className={`h-1.5 rounded-full ${stats?.maintenance?.health_score < 20 ? 'bg-red-500' : stats?.maintenance?.health_score < 50 ? 'bg-amber-500' : 'bg-green-500'}`} style={{ width: `${Math.max(0, Math.min(100, stats?.maintenance?.health_score ?? 100))}%` }}></div>
+            </div>
           </div>
         </div>
 
@@ -579,6 +845,48 @@ const GeneratorDashboard = () => {
             </div>
           </div>
         </div>
+        {/* AI Daily Logs Table (New System) */}
+        <div className="glass-card p-6 mb-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center gap-2">
+              <span>🤖</span> AI Daily Logs (New System)
+            </h2>
+            <input 
+              type="date" 
+              value={aiLogsDate}
+              onChange={(e) => setAiLogsDate(e.target.value)}
+              className="bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-1.5 text-white text-sm focus:border-primary outline-none transition-all"
+            />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-700 text-sm text-muted">
+                  <th className="pb-3 font-medium">Date</th>
+                  <th className="pb-3 font-medium">Submitted Meter/Hours</th>
+                  <th className="pb-3 font-medium">Hours Worked</th>
+                  <th className="pb-3 font-medium">Expected Fuel (L)</th>
+                  <th className="pb-3 font-medium">Predicted Remaining (L)</th>
+                  <th className="pb-3 font-medium">Actual Fuel Remaining (Liters)</th>
+                  <th className="pb-3 font-medium">Status</th>
+                  <th className="pb-3 font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <AiLogsTableBody 
+                  generatorId={stats?.generator?.id} 
+                  date={aiLogsDate} 
+                  onAnalyze={handleShowAIAnalysis} 
+                  onViewAnalysis={handleViewAIAnalysis}
+                  onVerifySuccess={() => {
+                    queryClient.invalidateQueries(['generatorStats', id]);
+                    queryClient.invalidateQueries(['generatorReports', stats?.generator?.id]);
+                  }}
+                />
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         {/* Recent Reports Table */}
         <div className="glass-card p-6">
@@ -637,14 +945,21 @@ const GeneratorDashboard = () => {
                         onClick={() => {
                           setVerifyForm({ 
                             report_id: report.id, 
-                            actual_fuel_remaining: report.actual_fuel_remaining || generator?.current_fuel || '',
+                            actual_fuel_remaining: report.actual_fuel_remaining || report.fuel_remaining || generator?.current_fuel || '',
                             report_data: report
                           });
                           setShowVerifyModal(true);
                         }}
-                        className="bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/30 px-4 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-lg shadow-indigo-500/20"
+                        className="bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-lg shadow-indigo-500/20 w-full mb-1"
                       >
-                        {report.status === 'Verified' ? 'View / Edit' : 'Analyze'}
+                        {report.status === 'Verified' ? 'View' : 'Verify'}
+                      </button>
+                      <button 
+                        onClick={() => handleShowAIAnalysis(report.id)}
+                        disabled={analyzingId === report.id}
+                        className="bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 border border-blue-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-lg shadow-blue-500/20 w-full flex justify-center items-center gap-1 disabled:opacity-50"
+                      >
+                        {analyzingId === report.id ? 'Analyzing...' : '📊 AI Analysis'}
                       </button>
                     </td>
                   </tr>
@@ -665,7 +980,17 @@ const GeneratorDashboard = () => {
               </h2>
               <button 
                 className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-                onClick={() => setShowFuelModal(true)}
+                onClick={() => {
+                  setFuelForm({
+                    date: new Date().toISOString().split('T')[0],
+                    type: 'Refill',
+                    amount: '',
+                    cost_per_liter: '',
+                    supplier_id: '',
+                    notes: ''
+                  });
+                  setShowFuelModal(true);
+                }}
               >
                 + Record Movement
               </button>
@@ -685,6 +1010,7 @@ const GeneratorDashboard = () => {
                       <th className="p-4 font-medium">Supplier</th>
                       <th className="p-4 font-medium">User</th>
                       <th className="p-4 font-medium">Notes</th>
+                      <th className="p-4 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -705,16 +1031,102 @@ const GeneratorDashboard = () => {
                         <td className="p-4 text-muted">{m.supplier_name || '-'}</td>
                         <td className="p-4 text-muted">{m.user_name || 'System'}</td>
                         <td className="p-4 text-muted">{m.notes || '-'}</td>
+                        <td className="p-4">
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => {
+                                setFuelForm({
+                                  id: m.id,
+                                  date: m.date.split(' ')[0],
+                                  type: m.type,
+                                  amount: m.amount,
+                                  cost_per_liter: m.cost_per_liter || '',
+                                  supplier_id: m.supplier_id || '',
+                                  notes: m.notes || ''
+                                });
+                                setShowFuelModal(true);
+                              }}
+                              className="p-1.5 text-blue-400 hover:bg-blue-400/10 rounded transition-colors"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if(window.confirm('Are you sure you want to void this movement?')) {
+                                  deleteFuelMovementMutation.mutate(m.id);
+                                }
+                              }}
+                              className="p-1.5 text-red-400 hover:bg-red-400/10 rounded transition-colors"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                     {(!fuelMovements || fuelMovements.length === 0) && (
                       <tr>
-                        <td colSpan="7" className="p-8 text-center text-muted italic">{t('generator.no_fuel')}</td>
+                        <td colSpan="8" className="p-8 text-center text-muted italic">{t('generator.no_fuel')}</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'Export' && (
+          <div className="space-y-6 animate-in fade-in zoom-in duration-300">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <FileSpreadsheet className="text-emerald-500" /> Export Monthly Report
+            </h2>
+            
+            <div className="glass-card p-8 border border-slate-700/50 max-w-2xl">
+              <p className="text-slate-300 mb-6">
+                Generate the perfectly formatted <strong>"6-SUIVI GAZOIL JOURNALIER"</strong> legacy Excel workbook. 
+                This will automatically calculate the surplus and missing fuel costs.
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">Start Date</label>
+                  <input 
+                    type="date" 
+                    value={exportStartDate}
+                    onChange={(e) => setExportStartDate(e.target.value)}
+                    className="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-primary outline-none transition-all mb-4"
+                  />
+                  <label className="block text-sm font-medium text-slate-400 mb-2">End Date</label>
+                  <input 
+                    type="date" 
+                    value={exportEndDate}
+                    onChange={(e) => setExportEndDate(e.target.value)}
+                    className="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-primary outline-none transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">Select Generator</label>
+                  <select 
+                    value={exportGeneratorId}
+                    onChange={(e) => setExportGeneratorId(e.target.value)}
+                    className="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-primary outline-none transition-all"
+                  >
+                    <option value="">All Generators (Monthly Summary)</option>
+                    {allGeneratorsData?.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              <button 
+                onClick={handleExport}
+                className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl shadow-lg shadow-emerald-500/20 font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+              >
+                <FileSpreadsheet size={24} />
+                Download Excel Report
+              </button>
             </div>
           </div>
         )}
@@ -859,8 +1271,8 @@ const GeneratorDashboard = () => {
       {/* Verify Fuel Modal (Manager AI Analysis) */}
       {showVerifyModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="glass-card w-full max-w-lg p-8 border border-slate-700 shadow-2xl relative animate-in fade-in zoom-in duration-200 text-left">
-            <div className="flex items-center gap-3 mb-6 border-b border-slate-700/50 pb-4">
+          <div className="glass-card w-full max-w-2xl p-6 md:p-8 border border-slate-700 shadow-2xl relative animate-in fade-in zoom-in duration-200 text-left max-h-[95vh] flex flex-col">
+            <div className="flex items-center gap-3 mb-6 border-b border-slate-700/50 pb-4 shrink-0">
               <div className="bg-primary/20 p-2 rounded-lg text-primary">
                 <Activity size={24} />
               </div>
@@ -870,39 +1282,58 @@ const GeneratorDashboard = () => {
               </div>
             </div>
 
-            <div className="space-y-6">
-              {/* Report Details & AI Checks */}
+            <div className="space-y-6 overflow-y-auto pr-2 custom-scrollbar">
               <div className="grid grid-cols-2 gap-4">
                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
                     <h3 className="text-xs font-bold text-muted uppercase tracking-wider mb-3">{t('generator.meter_readings')}</h3>
                     <div className="space-y-2 text-sm">
-                       <div className="flex justify-between"><span className="text-muted">Previous Meter:</span> <span className="text-white">{verifyForm.report_data?.previous_kwh || '-'}</span></div>
-                       <div className="flex justify-between"><span className="text-muted">Current Meter:</span> <span className="text-white font-bold">{verifyForm.report_data?.current_kwh || '-'}</span></div>
-                       <div className="flex justify-between"><span className="text-muted">Current Hours:</span> <span className="text-white">{verifyForm.report_data?.meter_hours || '-'}</span></div>
+                       <div className="flex justify-between"><span className="text-muted">{t('generator.prev_meter')}</span> <span className="text-white font-bold">{verifyForm.report_data?.previous_kwh > 0 ? verifyForm.report_data.previous_kwh : <span className="text-slate-500 italic">{t('generator.not_recorded')}</span>}</span></div>
+                       <div className="flex justify-between"><span className="text-muted">{t('generator.curr_meter')}</span> <span className="text-white font-bold">{verifyForm.report_data?.current_kwh > 0 ? verifyForm.report_data.current_kwh : <span className="text-slate-500 italic">{t('generator.not_recorded')}</span>}</span></div>
+                       <div className="flex justify-between"><span className="text-muted">{t('generator.prev_hours')}</span> <span className="text-white font-bold">{verifyForm.report_data?.previous_hours > 0 ? verifyForm.report_data.previous_hours : <span className="text-slate-500 italic">{t('generator.not_recorded')}</span>}</span></div>
+                       <div className="flex justify-between"><span className="text-muted">{t('generator.curr_hours')}</span> <span className="text-white font-bold">{verifyForm.report_data?.meter_hours > 0 ? verifyForm.report_data.meter_hours : <span className="text-slate-500 italic">{t('generator.not_recorded')}</span>}</span></div>
                     </div>
                  </div>
                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
                     <h3 className="text-xs font-bold text-muted uppercase tracking-wider mb-3">{t('generator.performance')}</h3>
                     <div className="space-y-2 text-sm">
-                       <div className="flex justify-between"><span className="text-muted">Energy Produced:</span> <span className="text-success font-bold">+{verifyForm.report_data?.kwh_produced} kWh</span></div>
-                       <div className="flex justify-between"><span className="text-muted">Engine Run Time:</span> <span className="text-indigo-300 font-bold">{verifyForm.report_data?.running_hours} h</span></div>
-                       <div className="flex justify-between"><span className="text-warning/80 font-bold">Est. Fuel Spent Today:</span> <span className="text-warning font-bold bg-warning/20 px-2 py-0.5 rounded">{verifyForm.report_data?.estimated_fuel_used ? parseFloat(verifyForm.report_data.estimated_fuel_used).toFixed(1) : '-'} L</span></div>
-                       <div className="flex justify-between"><span className="text-indigo-300/80 font-bold">Est. Fuel Remaining:</span> <span className="text-white font-bold bg-indigo-500/20 px-2 py-0.5 rounded">{verifyForm.report_data?.estimated_fuel_remaining ? parseFloat(verifyForm.report_data.estimated_fuel_remaining).toFixed(1) : '-'} L</span></div>
+                       <div className="flex justify-between"><span className="text-muted">{t('generator.energy_prod')}</span> <span className="text-success font-bold">{verifyForm.report_data?.kwh_produced > 0 ? `+${verifyForm.report_data.kwh_produced} kWh` : <span className="text-slate-500 italic">{t('generator.not_recorded')}</span>}</span></div>
+                       <div className="flex justify-between"><span className="text-muted">{t('generator.engine_run')}</span> <span className="text-indigo-300 font-bold">{verifyForm.report_data?.running_hours} h</span></div>
+                       <div className="flex justify-between"><span className="text-warning/80 font-bold">{t('generator.est_spent')}</span> <span className="text-warning font-bold bg-warning/20 px-2 py-0.5 rounded">{verifyForm.report_data?.estimated_fuel_used !== null && verifyForm.report_data?.estimated_fuel_used !== undefined ? parseFloat(verifyForm.report_data.estimated_fuel_used).toFixed(1) : '-'} L</span></div>
+                       <div className="flex justify-between"><span className="text-indigo-300/80 font-bold">{t('generator.est_remain')}</span> <span className="text-white font-bold bg-indigo-500/20 px-2 py-0.5 rounded">{verifyForm.report_data?.estimated_fuel_remaining !== null && verifyForm.report_data?.estimated_fuel_remaining !== undefined ? parseFloat(verifyForm.report_data.estimated_fuel_remaining).toFixed(1) : '-'} L</span></div>
+                       <div className="flex justify-between border-t border-slate-700/50 pt-2 mt-2"><span className="text-sky-300 font-bold">{t('generator.agent_reported_fuel')}</span> <span className="text-sky-100 font-bold bg-sky-500/20 px-2 py-0.5 rounded">{verifyForm.report_data?.fuel_remaining > 0 ? `${parseFloat(verifyForm.report_data.fuel_remaining).toFixed(1)} L` : <span className="text-slate-500 italic text-xs">{t('generator.not_entered')}</span>}</span></div>
                     </div>
                  </div>
               </div>
 
+              {/* AI Opinion Panel */}
+              {verifyForm.report_data?.ai_opinion && (
+                <div className="bg-indigo-900/20 p-5 rounded-xl border border-indigo-500/30 flex gap-4 items-start">
+                   <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400 shrink-0 mt-1">
+                      <Activity size={24} />
+                   </div>
+                   <div>
+                      <h4 className="text-indigo-300 font-bold text-sm mb-1 uppercase tracking-widest flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
+                        {t('generator.ai_analytics_engine')}
+                      </h4>
+                      <p className="text-slate-300 text-sm leading-relaxed">
+                         {verifyForm.report_data.ai_opinion}
+                      </p>
+                   </div>
+                </div>
+              )}
+
               {/* Manager Input */}
               <div className="bg-blue-500/10 p-5 rounded-xl border border-blue-500/20">
                 <label className="block text-sm font-bold text-blue-200 mb-2">
-                  What is the Actual Fuel Liter Remaining in the tank?
+                  {t('generator.actual_prompt')}
                 </label>
                 <p className="text-xs text-blue-300/70 mb-4">
-                  If it is not the same as the system estimate, the AI will analyze it to detect leaks, theft, or sensor issues. Leave blank if you haven't checked and want to accept the system's estimate.
+                  {t('generator.actual_desc_expanded')}
                 </p>
                 <div className="flex items-center gap-4">
                   <input type="number" className="w-full bg-slate-900 border border-blue-500/30 rounded-lg px-4 py-3 text-white text-xl font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all placeholder-blue-300/30" 
-                    placeholder={`System Estimate: CFA ${parseFloat(verifyForm.report_data?.estimated_fuel_remaining || 0).toFixed(1)}`}
+                    placeholder={`${t('generator.sys_est')} ${verifyForm.report_data?.estimated_fuel_remaining !== null && verifyForm.report_data?.estimated_fuel_remaining !== undefined ? parseFloat(verifyForm.report_data.estimated_fuel_remaining).toFixed(1) : 0} L`}
                     value={verifyForm.actual_fuel_remaining} 
                     onChange={e => setVerifyForm({...verifyForm, actual_fuel_remaining: e.target.value})} 
                     autoFocus
@@ -1023,7 +1454,7 @@ const GeneratorDashboard = () => {
               })()}
             </div>
 
-            <div className="flex justify-end gap-3 mt-8">
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-700/50 shrink-0">
               <button onClick={() => setShowVerifyModal(false)} className="px-6 py-2 rounded-lg text-white hover:bg-slate-800 transition-colors">{t('generator.cancel')}</button>
               <button 
                 onClick={() => {
@@ -1035,7 +1466,7 @@ const GeneratorDashboard = () => {
                 className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors font-bold"
                 disabled={verifyMutation.isLoading}
               >
-                {verifyMutation.isLoading ? 'Analyzing...' : 'Run AI Analysis & Verify'}
+                {verifyMutation.isLoading ? t('generator.analyzing', { defaultValue: 'Analyzing...' }) : t('generator.btn_verify_ai', { defaultValue: 'Run AI Analysis & Verify' })}
               </button>
             </div>
           </div>
@@ -1103,7 +1534,7 @@ const GeneratorDashboard = () => {
               <button 
                 onClick={() => fuelMutation.mutate(fuelForm)}
                 className="px-6 py-2 bg-primary hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-primary/30 transition-colors"
-                disabled={fuelMutation.isLoading || !fuelForm.amount}
+                disabled={fuelMutation.isLoading || fuelForm.amount === ''}
               >
                 {fuelMutation.isLoading ? 'Saving...' : 'Record Movement'}
               </button>
@@ -1111,6 +1542,28 @@ const GeneratorDashboard = () => {
           </div>
         </div>
       )}
+
+      {/* --- New AI Modals --- */}
+      <AddDailyLogModal 
+          isOpen={isAddDailyLogOpen} 
+          onClose={() => setIsAddDailyLogOpen(false)} 
+          generatorId={stats?.generator?.id || id}
+          onSuccess={() => {
+            queryClient.invalidateQueries(['generatorReports', stats?.generator?.id]);
+            queryClient.invalidateQueries(['generatorStats', id]);
+          }}
+      />
+
+      <AIAnalysisModal
+          isOpen={isAIAnalysisOpen}
+          onClose={() => setIsAIAnalysisOpen(false)}
+          analysisData={selectedAIAnalysis}
+          logId={selectedAIAnalysis?.logId}
+          onRefresh={handleShowAIAnalysis}
+      />
+
+      {/* Generator Settings Modal inside Main Dashboard */}
+      {showAddGenerator && renderGeneratorModal()}
 
     </div>
   );

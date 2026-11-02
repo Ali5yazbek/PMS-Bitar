@@ -16,6 +16,7 @@ const RentRenewalModal = ({ isOpen, onClose, profileId, tenantName, onComplete }
     onSuccess: () => {
       queryClient.invalidateQueries(['dashboardStats']);
       queryClient.invalidateQueries(['tenantRentProfile']);
+      queryClient.invalidateQueries(['expiringItems']);
       if (onComplete) onComplete();
       onClose();
     }

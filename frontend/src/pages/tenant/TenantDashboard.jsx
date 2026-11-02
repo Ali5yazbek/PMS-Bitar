@@ -3,6 +3,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../api/axios';
 import { Home, Shield, AlertCircle } from 'lucide-react';
+import InteractiveCurrency from '../../components/common/InteractiveCurrency';
 
 const TenantDashboard = () => {
   const { t } = useTranslation();
@@ -44,7 +45,9 @@ const TenantDashboard = () => {
                 </div>
                 <div>
                   <span className="text-muted text-sm block">{t('tenantdashboard.monthly_rent', { defaultValue: `Monthly Rent` })}</span>
-                  <span className="text-white font-medium text-lg">{t('tenantdashboard.cfa', { defaultValue: `CFA` })} {contract.monthly_rent}</span>
+                  <span className="text-white font-medium text-lg">
+                    <InteractiveCurrency amountCFA={contract.monthly_rent} />
+                  </span>
                 </div>
               </div>
             </div>

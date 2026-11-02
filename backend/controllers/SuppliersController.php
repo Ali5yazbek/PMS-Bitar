@@ -40,7 +40,17 @@ class SuppliersController {
 
         // Purchases (Invoices)
         $stmtPurchases = $this->db->prepare("
-            SELECT po.*, c.name as construction_name 
+            SELECT po.*, 
+                   COALESCE(po.amount_paid, 0) as amount_paid,
+                   GREATEST(0, COALESCE(po.remaining_balance, po.total_price - COALESCE(po.amount_paid, 0))) as remaining_balance,
+                   CASE 
+                       WHEN GREATEST(0, COALESCE(po.remaining_balance, po.total_price - COALESCE(po.amount_paid, 0))) <= 0 THEN 'Paid'
+                       WHEN COALESCE(po.amount_paid, 0) > 0 THEN 'Partially Paid'
+                       ELSE 'Unpaid'
+                   END as payment_status,
+                   COALESCE(po.invoice_date, DATE(po.created_at)) as invoice_date,
+                   COALESCE(po.due_date, DATE_ADD(COALESCE(po.invoice_date, DATE(po.created_at)), INTERVAL 30 DAY)) as due_date,
+                   c.name as construction_name 
             FROM purchase_orders po
             LEFT JOIN constructions c ON po.construction_id = c.id
             WHERE po.supplier_id = ? 
@@ -67,10 +77,10 @@ class SuppliersController {
                 $now = new DateTime();
                 if ($now > $due) {
                     $diff = $now->diff($due)->days;
-                    if ($diff <= 30) $aging['0_30'] += $p['remaining_balance'];
-                    elseif ($diff <= 60) $aging['31_60'] += $p['remaining_balance'];
-                    elseif ($diff <= 90) $aging['61_90'] += $p['remaining_balance'];
-                    else $aging['90_plus'] += $p['remaining_balance'];
+                    if ($diff <= 30) $aging['0_30'] += floatval($p['remaining_balance']);
+                    elseif ($diff <= 60) $aging['31_60'] += floatval($p['remaining_balance']);
+                    elseif ($diff <= 90) $aging['61_90'] += floatval($p['remaining_balance']);
+                    else $aging['90_plus'] += floatval($p['remaining_balance']);
                 }
             }
         }
@@ -109,10 +119,10 @@ class SuppliersController {
             }
         }
 
-        // Add opening balance to totals if we want, or just rely on transactions for balance
+        // Calculate current balance based on unpaid purchase orders
         $currentBalance = 0;
-        if (count($transactions) > 0) {
-            $currentBalance = $transactions[count($transactions)-1]['balance_after'];
+        foreach ($purchases as $p) {
+            $currentBalance += floatval($p['remaining_balance']);
         }
 
         echo json_encode([
@@ -168,10 +178,32 @@ class SuppliersController {
         AuthMiddleware::requireLogin();
         $data = json_decode(file_get_contents("php://input"), true);
         
-        $amount = floatval($data['amount']);
+        $amount = floatval($data['amount'] ?? 0);
         if ($amount <= 0) {
             http_response_code(400);
             echo json_encode(['error' => 'Amount must be greater than 0']);
+            return;
+        }
+
+        // 1. Calculate total outstanding balance across all purchase orders for this supplier
+        $stmtTotalDebt = $this->db->prepare("
+            SELECT COALESCE(SUM(GREATEST(0, COALESCE(remaining_balance, total_price - COALESCE(amount_paid, 0)))), 0) 
+            FROM purchase_orders 
+            WHERE supplier_id = ?
+        ");
+        $stmtTotalDebt->execute([$id]);
+        $totalOutstandingDebt = floatval($stmtTotalDebt->fetchColumn());
+
+        if ($totalOutstandingDebt <= 0) {
+            http_response_code(400);
+            echo json_encode(['error' => 'This supplier is already fully paid. No outstanding payments remain.']);
+            return;
+        }
+
+        // Stop recording when payment exceeds total outstanding balance
+        if ($amount > $totalOutstandingDebt) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Payment amount (CFA ' . number_format($amount, 0) . ') cannot exceed total outstanding balance of CFA ' . number_format($totalOutstandingDebt, 0)]);
             return;
         }
 
@@ -183,28 +215,49 @@ class SuppliersController {
 
         $this->db->beginTransaction();
         try {
-            // 1. Create supplier_payment
+            // 2. Create supplier_payment
             $stmtPay = $this->db->prepare("INSERT INTO supplier_payments (supplier_id, amount, payment_date, payment_method, reference_number, bank_name, notes) VALUES (?, ?, ?, ?, ?, ?, ?)");
             $stmtPay->execute([$id, $amount, $date, $method, $ref, $bank, $notes]);
             $payment_id = $this->db->lastInsertId();
 
-            // 2. Allocate payment to invoices if specified, else do FIFO
             $remainingAmountToAllocate = $amount;
             $allocations = [];
-            
-            if (isset($data['allocations']) && is_array($data['allocations']) && count($data['allocations']) > 0) {
-                // Specific allocation
-                foreach ($data['allocations'] as $alloc) {
-                    $allocAmt = floatval($alloc['amount']);
-                    $poId = $alloc['purchase_order_id'];
-                    if ($allocAmt > 0 && $remainingAmountToAllocate >= $allocAmt) {
-                        $allocations[] = ['po_id' => $poId, 'amount' => $allocAmt];
-                        $remainingAmountToAllocate -= $allocAmt;
-                    }
+
+            // 3. Check if specific invoice targeted
+            if (!empty($data['purchase_order_id'])) {
+                $targetPoId = intval($data['purchase_order_id']);
+                $stmtPO = $this->db->prepare("
+                    SELECT id, total_price, COALESCE(amount_paid, 0) as amount_paid, 
+                           GREATEST(0, COALESCE(remaining_balance, total_price - COALESCE(amount_paid, 0))) as remaining_balance 
+                    FROM purchase_orders 
+                    WHERE id = ? AND supplier_id = ?
+                ");
+                $stmtPO->execute([$targetPoId, $id]);
+                $targetPO = $stmtPO->fetch();
+
+                if (!$targetPO) {
+                    throw new Exception('Selected invoice not found');
                 }
+
+                if (floatval($targetPO['remaining_balance']) <= 0) {
+                    throw new Exception('This invoice has already been fully paid.');
+                }
+
+                if ($amount > floatval($targetPO['remaining_balance'])) {
+                    throw new Exception('Payment amount cannot exceed the invoice remaining balance of CFA ' . number_format($targetPO['remaining_balance'], 0));
+                }
+
+                $allocations[] = ['po_id' => $targetPoId, 'amount' => $amount];
+                $remainingAmountToAllocate = 0;
             } else {
                 // Auto FIFO allocation
-                $stmtUnpaid = $this->db->prepare("SELECT id, remaining_balance FROM purchase_orders WHERE supplier_id = ? AND remaining_balance > 0 ORDER BY due_date ASC, created_at ASC");
+                $stmtUnpaid = $this->db->prepare("
+                    SELECT id, total_price, COALESCE(amount_paid, 0) as amount_paid, 
+                           GREATEST(0, COALESCE(remaining_balance, total_price - COALESCE(amount_paid, 0))) as remaining_balance 
+                    FROM purchase_orders 
+                    WHERE supplier_id = ? AND GREATEST(0, COALESCE(remaining_balance, total_price - COALESCE(amount_paid, 0))) > 0 
+                    ORDER BY COALESCE(due_date, created_at) ASC, id ASC
+                ");
                 $stmtUnpaid->execute([$id]);
                 $unpaidPOs = $stmtUnpaid->fetchAll();
                 
@@ -212,32 +265,36 @@ class SuppliersController {
                     if ($remainingAmountToAllocate <= 0) break;
                     
                     $payAmt = min($remainingAmountToAllocate, floatval($po['remaining_balance']));
-                    $allocations[] = ['po_id' => $po['id'], 'amount' => $payAmt];
-                    $remainingAmountToAllocate -= $payAmt;
+                    if ($payAmt > 0) {
+                        $allocations[] = ['po_id' => $po['id'], 'amount' => $payAmt];
+                        $remainingAmountToAllocate -= $payAmt;
+                    }
                 }
             }
 
-            // 3. Process allocations
+            // 4. Process allocations
             $stmtAlloc = $this->db->prepare("INSERT INTO supplier_payment_allocations (payment_id, purchase_order_id, amount) VALUES (?, ?, ?)");
-            $stmtUpdatePO = $this->db->prepare("UPDATE purchase_orders SET amount_paid = amount_paid + ?, remaining_balance = remaining_balance - ? WHERE id = ?");
+            $stmtUpdatePO = $this->db->prepare("
+                UPDATE purchase_orders 
+                SET amount_paid = COALESCE(amount_paid, 0) + ?, 
+                    remaining_balance = GREATEST(0, COALESCE(remaining_balance, total_price - COALESCE(amount_paid, 0)) - ?),
+                    payment_status = CASE WHEN (COALESCE(remaining_balance, total_price - COALESCE(amount_paid, 0)) - ?) <= 0 THEN 'Paid' ELSE 'Partially Paid' END
+                WHERE id = ?
+            ");
             
             foreach ($allocations as $alloc) {
                 $stmtAlloc->execute([$payment_id, $alloc['po_id'], $alloc['amount']]);
-                $stmtUpdatePO->execute([$alloc['amount'], $alloc['amount'], $alloc['po_id']]);
-                
-                // Update payment_status dynamically
-                $this->db->exec("UPDATE purchase_orders SET payment_status = CASE WHEN remaining_balance <= 0 THEN 'Paid' ELSE 'Partially Paid' END WHERE id = " . intval($alloc['po_id']));
+                $stmtUpdatePO->execute([$alloc['amount'], $alloc['amount'], $alloc['amount'], $alloc['po_id']]);
             }
 
-            // 4. Update Ledger
-            // Get current balance
+            // 5. Update Ledger Transactions
             $stmtBal = $this->db->prepare("SELECT balance_after FROM supplier_transactions WHERE supplier_id = ? ORDER BY transaction_date DESC, id DESC LIMIT 1");
             $stmtBal->execute([$id]);
             $lastBal = $stmtBal->fetchColumn();
-            $newBal = floatval($lastBal) - $amount; // Payment decreases debt
+            $newBal = floatval($lastBal) - $amount;
 
             $stmtTx = $this->db->prepare("INSERT INTO supplier_transactions (supplier_id, type, reference_id, amount, balance_after, transaction_date) VALUES (?, 'Payment', ?, ?, ?, ?)");
-            $stmtTx->execute([$id, 'PAY-'.$payment_id, -$amount, $newBal, $date]); // Use negative amount for payments to signify reduction
+            $stmtTx->execute([$id, 'PAY-'.$payment_id, -$amount, $newBal, $date]);
 
             $this->db->commit();
             echo json_encode(['message' => 'Payment recorded successfully', 'payment_id' => $payment_id, 'unallocated' => $remainingAmountToAllocate]);

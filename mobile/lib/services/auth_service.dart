@@ -1,42 +1,49 @@
 // ─── Auth Service ─────────────────────────────────────────────────────────────
 
 import 'dart:convert';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:dio/dio.dart';
 import '../models/user.dart';
+import '../core/storage/secure_storage_helper.dart';
 import 'api_service.dart';
 
 class AuthService {
   final ApiService _api = ApiService();
-  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   // Login → store token + user, return User
   Future<User> login(String loginIdentifier, String password) async {
-    final response = await _api.post('/auth/login', data: {
-      'loginIdentifier': loginIdentifier,
-      'password': password,
-    });
+    final response = await _api.client.post(
+      '/auth/login',
+      data: {
+        'loginIdentifier': loginIdentifier,
+        'email': loginIdentifier,
+        'username': loginIdentifier,
+        'password': password,
+      },
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
 
-    final token = response.data['token'] as String;
-    final userJson = response.data['user'] as Map<String, dynamic>;
+    final data = response.data is String ? jsonDecode(response.data) : response.data;
+    final token = data['token'] as String;
+    final userJson = data['user'] as Map<String, dynamic>;
 
-    await _storage.write(key: 'token', value: token);
-    await _storage.write(key: 'user', value: jsonEncode(userJson));
+    await SecureStorageHelper.instance.write('token', token);
+    await SecureStorageHelper.instance.write('user', jsonEncode(userJson));
 
     return User.fromJson(userJson);
   }
 
   Future<void> logout() async {
-    await _storage.delete(key: 'token');
-    await _storage.delete(key: 'user');
+    await SecureStorageHelper.instance.delete('token');
+    await SecureStorageHelper.instance.delete('user');
   }
 
   Future<bool> isLoggedIn() async {
-    final token = await _storage.read(key: 'token');
+    final token = await SecureStorageHelper.instance.read('token');
     return token != null && token.isNotEmpty;
   }
 
   Future<User?> getCurrentUser() async {
-    final userJson = await _storage.read(key: 'user');
+    final userJson = await SecureStorageHelper.instance.read('user');
     if (userJson == null) return null;
     return User.fromJson(jsonDecode(userJson));
   }

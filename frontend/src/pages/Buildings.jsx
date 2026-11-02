@@ -47,7 +47,7 @@ const Buildings = () => {
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* Center Content */}
-      <div className="flex-1 overflow-y-auto p-8 hide-scrollbar">
+      <div className="flex-1 overflow-y-auto p-8 hide-scrollbar print:hidden">
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold text-white">{t('buildings.title')}</h1>
@@ -176,49 +176,6 @@ const Buildings = () => {
         </div>
       </div>
 
-      {/* Right Summary Panel */}
-      <div className="hidden lg:flex w-80 glass-panel p-6 flex-col overflow-y-auto hide-scrollbar z-10 shrink-0">
-        <h2 className="text-xl font-bold text-white mb-6">{t('buildings.summary_title')}</h2>
-        
-        <div className="space-y-6">
-          <div className="p-5 glass-card relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-20 h-20 bg-primary/20 blur-2xl rounded-full"></div>
-            <h3 className="text-white font-bold text-lg mb-4">{t('buildings.all_buildings')}</h3>
-            <div className="space-y-4">
-              <div className="flex justify-between items-center border-b border-slate-700/50 pb-2">
-                <span className="text-muted flex items-center"><Building size={16} className="me-2" /> {t('buildings.total_buildings')}</span>
-                <span className="text-white font-bold">{buildings?.length || 0}</span>
-              </div>
-              <div className="flex justify-between items-center border-b border-slate-700/50 pb-2">
-                <span className="text-muted flex items-center"><Home size={16} className="me-2" /> {t('buildings.total_apartments')}</span>
-                <span className="text-white font-bold">{totalApartments}</span>
-              </div>
-              <div className="flex justify-between items-center border-b border-slate-700/50 pb-2">
-                <span className="text-muted text-sm">{t('buildings.occupied')}</span>
-                <span className="text-success font-bold">{occupiedApartments}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted text-sm">{t('buildings.vacant')}</span>
-                <span className="text-warning font-bold">{vacantApartments}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-5 glass-card border border-slate-700/50">
-            <h3 className="text-muted text-sm font-medium uppercase tracking-wider mb-4">{t('buildings.financial_overview')}</h3>
-            <div className="space-y-4">
-              <div className="bg-slate-800/50 p-4 rounded-xl">
-                <div className="flex items-center text-muted mb-1 text-sm"><DollarSign size={16} className="me-1"/> {t('buildings.monthly_income')}</div>
-                <div className="text-2xl font-bold text-success">{t('common.currency')} 18,000</div>
-              </div>
-              <div className="bg-slate-800/50 p-4 rounded-xl border border-danger/20">
-                <div className="flex items-center text-muted mb-1 text-sm"><DollarSign size={16} className="me-1 text-danger"/> {t('buildings.unpaid_rent')}</div>
-                <div className="text-2xl font-bold text-danger">{t('common.currency')} 3,000</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {selectedBuildingCosts && (
         <ApartmentCostsModal 
