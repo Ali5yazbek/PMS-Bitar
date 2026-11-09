@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "192387594223",
+    "project_id": "bitar-pms",
+    "storage_bucket": "bitar-pms.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:192387594223:android:49fdaaaa22c899d9c2a81a",
+        "android_client_info": {
+          "package_name": "com.bitar.bitar_pms"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHfdeXmqXf3rEDvE2gL5EvvPpk9UWWwRs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
