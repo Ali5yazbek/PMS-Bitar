@@ -622,7 +622,17 @@ const ReleaseManager = () => {
                         Edit
                       </button>
 
-                      {rel.download_url && (
+                      {isIos && !rel.ipa_verified ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-slate-900 text-slate-500 cursor-not-allowed inline-block border border-slate-800"
+                          title="Binary awaiting compilation & upload"
+                        >
+                          <Download size={12} className="inline mr-1 opacity-40" />
+                          Pending IPA
+                        </button>
+                      ) : rel.download_url ? (
                         <a
                           href={rel.download_url}
                           className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 inline-block transition-colors"
@@ -631,7 +641,7 @@ const ReleaseManager = () => {
                           <Download size={12} className="inline mr-1" />
                           {rel.binary_type?.toUpperCase() || 'Binary'}
                         </a>
-                      )}
+                      ) : null}
 
                       {!isCurrent && (
                         <button
