@@ -59,14 +59,19 @@ class _AgentSubscriptionsScreenState extends ConsumerState<AgentSubscriptionsScr
           children: [
             // Header tabs: Pending Tasks, Under Review, Accepted, Rejected
             Container(
-              color: const Color(0xFF0D1620),
+              decoration: const BoxDecoration(
+                color: AppTheme.surface,
+                border: Border(bottom: BorderSide(color: AppTheme.border)),
+              ),
               child: TabBar(
                 controller: _tabController,
                 isScrollable: true,
+                tabAlignment: TabAlignment.start,
                 indicatorColor: AppTheme.primary,
-                labelColor: Colors.white,
-                unselectedLabelColor: Colors.blueGrey.shade400,
-                labelStyle: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 12),
+                dividerColor: Colors.transparent,
+                labelColor: AppTheme.textPrimary,
+                unselectedLabelColor: AppTheme.textMuted,
+                labelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 12.5),
                 onTap: (index) {
                   final statuses = ['Pending', 'Under Review', 'Accepted', 'Rejected'];
                   setState(() => _selectedStatus = statuses[index]);

@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, Zap, Coins, Globe, ChevronDown } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, Zap, Coins, Globe, ChevronDown, Smartphone } from 'lucide-react';
 
 const Login = () => {
   const { t, i18n } = useTranslation();
@@ -50,6 +50,14 @@ const Login = () => {
         </div>
         
         <div className="flex items-center gap-4">
+          <a
+            href="/download"
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-full text-xs font-semibold text-emerald-400 transition-all shadow-[0_0_12px_rgba(16,185,129,0.2)]"
+          >
+            <Smartphone size={13} />
+            <span>Download App</span>
+          </a>
+
           <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-full text-xs font-medium">
             <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
             <span className="text-slate-300">{t('System Online')}</span>
@@ -193,6 +201,18 @@ const Login = () => {
                 <span>{t('CFA / USD / EUR')}</span>
               </div>
             </div>
+          </div>
+
+          {/* Download Official Mobile App Banner */}
+          <div className="mt-5 text-center">
+            <a
+              href="/download"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-700/60 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition-all shadow-md group"
+            >
+              <Smartphone size={14} className="group-hover:scale-110 transition-transform" />
+              <span>{t('Download Official Mobile App (Android APK / iPhone)', 'Download Official Mobile App (Android APK / iPhone)')}</span>
+              <ArrowRight size={13} className="group-hover:translate-x-1 transition-transform" />
+            </a>
           </div>
         </div>
       </main>

@@ -65,46 +65,68 @@ class _EnterpriseMobileScaffoldState extends State<EnterpriseMobileScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final dateStr = '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
     final canPop = Navigator.of(context).canPop();
+    final isEmbeddedInMainShell = !canPop && !widget.showBottomNav && widget.floatingActionButton == null;
 
-    final content = Column(
-      children: [
-        // Sleek Luxury Context Strip (replaces redundant second AppBar)
-        Container(
-          margin: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color(0xE6111E2C),
-                Color(0xCC0A131C),
+    // When embedded inside MainShell, MainShell already renders the top AppBar with the
+    // authenticated user's identity, role, currency toggle, search, notifications, and logout.
+    // Do NOT render a duplicate second user bar underneath it. Only show a compact sync strip
+    // if the device is currently offline or uploading queued items.
+    if (isEmbeddedInMainShell) {
+      if (_currentSyncStatus.state == SyncStatusState.synchronized) {
+        return widget.body;
+      }
+      return Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: const BoxDecoration(
+              color: AppTheme.surface,
+              border: Border(bottom: BorderSide(color: AppTheme.border)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  _currentSyncStatus.state == SyncStatusState.offline
+                      ? 'Working Offline • Changes queued locally'
+                      : 'Synchronizing pending field packets...',
+                  style: GoogleFonts.inter(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                SyncStatusIndicator(status: _currentSyncStatus),
               ],
             ),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: AppTheme.border.withValues(alpha: 0.8),
-              width: 1,
+          ),
+          Expanded(child: widget.body),
+        ],
+      );
+    }
+
+    // Standalone pushed screen (canPop == true): show a clean navigation header with back button and title.
+    final content = Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: const BoxDecoration(
+            color: AppTheme.surface,
+            border: Border(
+              bottom: BorderSide(color: AppTheme.border, width: 1),
             ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
           ),
           child: Row(
             children: [
               if (canPop) ...[
                 InkWell(
                   onTap: () => Navigator.of(context).maybePop(),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                   child: Container(
-                    padding: const EdgeInsets.all(7),
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: AppTheme.surfaceHover,
                       borderRadius: BorderRadius.circular(10),
@@ -112,92 +134,41 @@ class _EnterpriseMobileScaffoldState extends State<EnterpriseMobileScaffold> {
                     ),
                     child: const Icon(
                       Icons.arrow_back_ios_new_rounded,
-                      size: 14,
+                      size: 15,
                       color: AppTheme.textPrimary,
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
               ],
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  gradient: AppTheme.primaryGradient,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppTheme.primary.withValues(alpha: 0.3),
-                      blurRadius: 10,
-                    ),
-                  ],
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : 'U',
-                  style: GoogleFonts.outfit(
-                    color: const Color(0xFF04130F),
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            widget.userName,
-                            style: GoogleFonts.outfit(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textPrimary,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppTheme.accent.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: AppTheme.accent.withValues(alpha: 0.35),
-                              width: 0.8,
-                            ),
-                          ),
-                          child: Text(
-                            widget.userRole.toUpperCase(),
-                            style: GoogleFonts.plusJakartaSans(
-                              color: AppTheme.accent,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
                     Text(
-                      '${widget.activeBuilding ?? 'All Properties'}  •  $dateStr',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 10.5,
-                        color: AppTheme.textMuted,
-                        fontWeight: FontWeight.w500,
+                      widget.title,
+                      style: GoogleFonts.outfit(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
+                    if (widget.activeBuilding != null && widget.activeBuilding!.isNotEmpty)
+                      Text(
+                        widget.activeBuilding!,
+                        style: GoogleFonts.inter(
+                          fontSize: 11.5,
+                          color: AppTheme.textSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                   ],
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 8),
               SyncStatusIndicator(status: _currentSyncStatus),
             ],
           ),
@@ -207,20 +178,12 @@ class _EnterpriseMobileScaffoldState extends State<EnterpriseMobileScaffold> {
     );
 
     return Scaffold(
-      backgroundColor: canPop ? AppTheme.background : Colors.transparent,
+      backgroundColor: AppTheme.background,
       floatingActionButton: widget.floatingActionButton,
-      body: canPop
-          ? AmbientLuxuryBackground(
-              child: SafeArea(
-                bottom: !widget.showBottomNav,
-                child: content,
-              ),
-            )
-          : SafeArea(
-              top: false,
-              bottom: !widget.showBottomNav,
-              child: content,
-            ),
+      body: SafeArea(
+        bottom: !widget.showBottomNav,
+        child: content,
+      ),
       bottomNavigationBar: widget.showBottomNav
           ? Container(
               decoration: const BoxDecoration(

@@ -15,12 +15,8 @@ const MaintenanceAdmin = () => {
   const [selectedTask, setSelectedTask] = useState(null);
   const [historyStatusFilter, setHistoryStatusFilter] = useState('All');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
-  const [reportStartDate, setReportStartDate] = useState(() => {
-    const d = new Date();
-    d.setDate(1);
-    return d.toISOString().split('T')[0];
-  });
-  const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
   const [selectedWorkerTasks, setSelectedWorkerTasks] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
   const [prevPendingCount, setPrevPendingCount] = useState(0);
@@ -52,7 +48,8 @@ const MaintenanceAdmin = () => {
       const res = await axios.get('/maintenance/admin/tasks');
       return res.data;
     },
-    refetchInterval: 5000 // Auto-refresh every 5 seconds
+    staleTime: 25000,
+    refetchInterval: 30000
   });
 
   const { data: historyTasks, isLoading: loadingHistory } = useQuery({
@@ -61,7 +58,8 @@ const MaintenanceAdmin = () => {
       const res = await axios.get('/maintenance/admin/history');
       return res.data;
     },
-    refetchInterval: 10000 // Auto-refresh every 10 seconds
+    staleTime: 25000,
+    refetchInterval: 30000
   });
 
   const { data: tenantRequests, isLoading: loadingTenantRequests } = useQuery({
@@ -70,7 +68,8 @@ const MaintenanceAdmin = () => {
       const res = await axios.get('/maintenance-tickets/all');
       return res.data;
     },
-    refetchInterval: 10000
+    staleTime: 25000,
+    refetchInterval: 30000
   });
 
   const updateTicketStatusMutation = useMutation({

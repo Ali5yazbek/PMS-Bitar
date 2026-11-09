@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import '../../services/notification_service.dart';
 import '../../services/api_service.dart';
 
@@ -35,28 +34,16 @@ class RealtimeService {
   }
 
   void startConnection() {
-    _trySseConnection().then((success) {
-      if (!success) {
-        _startPollingFallback();
-      }
-    });
-  }
-
-  Future<bool> _trySseConnection() async {
-    try {
-      _mode = ConnectionMode.sse;
-      return false; // Fallback to 5s ApiService polling for high-reliability PHP compatibility
-    } catch (e) {
-      return false;
-    }
+    _startPollingFallback();
   }
 
   void _startPollingFallback() {
     _mode = ConnectionMode.polling;
     _pollingTimer?.cancel();
-    if (kDebugMode) print('RealtimeService: Started 5-second polling fallback via ApiService.');
 
-    _pollingTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+    // Since FCM delivers push notifications in real time across all states,
+    // use a lightweight 45-second foreground sync interval to conserve RAM & battery.
+    _pollingTimer = Timer.periodic(const Duration(seconds: 45), (_) async {
       await pollLatestEvents();
     });
   }
@@ -68,11 +55,13 @@ class RealtimeService {
         final List list = res.data is List ? res.data : (res.data['notifications'] ?? []);
 
         for (var item in list) {
-          final event = RealtimeEvent(
-            type: item['type'] ?? 'general',
-            data: Map<String, dynamic>.from(item),
-          );
-          _eventController.add(event);
+          if (item is Map) {
+            final event = RealtimeEvent(
+              type: item['type']?.toString() ?? 'general',
+              data: Map<String, dynamic>.from(item),
+            );
+            _eventController.add(event);
+          }
         }
 
         // Delegate notification deduplication & pushing to NotificationService
@@ -85,6 +74,7 @@ class RealtimeService {
 
   void dispose() {
     _pollingTimer?.cancel();
+    _pollingTimer = null;
     _mode = ConnectionMode.disconnected;
   }
 }

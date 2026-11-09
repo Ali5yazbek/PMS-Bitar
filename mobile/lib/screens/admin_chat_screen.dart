@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import '../config/app_theme.dart';
 import '../services/api_service.dart';
 
@@ -18,7 +18,9 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
   final ScrollController _scrollController = ScrollController();
 
   bool _isLoading = false;
+  bool _toolBusy = false;
   bool _dbSynced = false;
+  Map<String, dynamic> _memoryContext = {};
 
   // Live Full-Database Knowledge Graph in memory
   Map<String, dynamic> _financialSummary = {};
@@ -40,34 +42,123 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
     {
       'isMe': false,
       'text':
-          'Hello Admin! I am **Agency AI** — your full-database executive intelligence engine.\n\n'
-          'I know every building, apartment, tenant, contract, payment, maintenance ticket, generator, and purchase in real time. Ask me anything in natural human language (English, Français, or العربية):\n'
-          '• 📊 **"Give me a full agency summary"**\n'
+          'Hello! I am **Agency AI** — your autonomous cross-platform executive intelligence & action engine.\n\n'
+          'I am connected live to every building, apartment, tenant, contract, payment, maintenance ticket, generator, and purchase, and I can also **execute authorized approvals** and **run live diagnostics** (in English, Français, or العربية):\n'
+          '• 💡 **"Proactive insights"** (Anomalies & Priorities)\n'
+          '• 🩺 **"Run system diagnostics"** (Live Health Check)\n'
+          '• 🛒 **"Show pending purchases"** (Approve / Reject in Chat)\n'
           '• 💰 **"How much rent did we collect and what is unpaid?"**\n'
-          '• 🏢 **"Tell me everything about Galaxy building"**\n'
-          '• 🏠 **"Which apartments are vacant right now?"**\n'
-          '• 👤 **"Who lives in Apt A1?"** or **"Find tenant Ali"**\n'
-          '• 🔧 **"What maintenance issues or AC tasks are open?"**\n'
-          '• 🛒 **"Show all apartment purchases and costs"**',
+          '• 👤 **"Tell me everything about [Tenant Name]"**\n'
+          '• 🏠 **"Which apartments are vacant right now?"**',
       'type': 'text',
     }
   ];
 
   final List<String> _suggestions = const [
+    'Proactive insights',
+    'Run system diagnostics',
+    'Pending purchases',
     'Full agency summary',
     'How much rent is unpaid?',
     'Vacant apartments',
     'Open maintenance issues',
-    'All apartment purchases',
     'Expiring contracts',
-    'Buildings overview',
     'Generator & energy status',
   ];
 
   @override
   void initState() {
     super.initState();
+    _loadSyncedHistory();
     _syncDatabaseKnowledgeGraph();
+  }
+
+  Future<void> _loadSyncedHistory() async {
+    try {
+      final res = await ApiService().get('/ai/history');
+      if (!mounted || res.data is! Map) return;
+      final data = Map<String, dynamic>.from(res.data as Map);
+      if (data['context'] is Map) {
+        _memoryContext = Map<String, dynamic>.from(data['context'] as Map);
+      }
+      if (data['messages'] is List && (data['messages'] as List).isNotEmpty) {
+        final synced = <Map<String, dynamic>>[];
+        for (final raw in data['messages'] as List) {
+          if (raw is! Map) continue;
+          synced.add({
+            'isMe': raw['role'] == 'user',
+            'text': (raw['text'] ?? '').toString(),
+            'type': (raw['type'] ?? 'text').toString(),
+            'data': raw['data'],
+            'actions': raw['actions'],
+            'requires_confirmation': raw['requires_confirmation'] == true,
+            'pending_tool': raw['pending_tool'],
+          });
+        }
+        if (synced.isNotEmpty) {
+          setState(() {
+            _messages
+              ..clear()
+              ..addAll(synced);
+          });
+          _scrollToBottom();
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _clearConversationHistory() async {
+    try {
+      await ApiService().post('/ai/clear');
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _memoryContext = {};
+      _messages
+        ..clear()
+        ..add({
+          'isMe': false,
+          'text': '🔄 **Conversation Memory Reset.** Ready for new questions or autonomous commands.',
+          'type': 'text',
+        });
+    });
+  }
+
+  Future<void> _executeBackendTool(String toolName, dynamic targetId, Map<String, dynamic> params) async {
+    if (_toolBusy) return;
+    setState(() => _toolBusy = true);
+    try {
+      final res = await ApiService().post('/ai/execute-tool', data: {
+        'tool_name': toolName,
+        'target_id': targetId,
+        'parameters': params,
+      });
+      if (!mounted) return;
+      final out = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : <String, dynamic>{};
+      setState(() {
+        _messages.add({
+          'isMe': false,
+          'text': (out['reply'] ?? '✅ Action executed successfully.').toString(),
+          'type': (out['type'] ?? 'text').toString(),
+          'data': out['data'],
+        });
+      });
+      _scrollToBottom();
+      ApiService().clearCache();
+      _syncDatabaseKnowledgeGraph();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _messages.add({
+          'isMe': false,
+          'text': '❌ **Tool Execution Error:** $e',
+          'type': 'text',
+        });
+      });
+      _scrollToBottom();
+    } finally {
+      if (mounted) setState(() => _toolBusy = false);
+    }
   }
 
   @override
@@ -171,35 +262,58 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
       await _syncDatabaseKnowledgeGraph();
     }
 
-    // 1. Run local natural-language reasoning over the full database knowledge graph
-    final localAnswer = await _analyzeHumanQuestion(text);
-
-    // 2. Also query backend /ai/chat if needed
-    Map<String, dynamic>? backendData;
-    if (localAnswer == null || localAnswer['preferLocal'] != true) {
-      try {
-        final res = await ApiService().post('/ai/chat', data: {'message': text});
-        if (res.data is Map<String, dynamic>) {
-          backendData = res.data as Map<String, dynamic>;
-        }
-      } catch (_) {}
-    }
+    // Run local 360-degree dossier engine AND backend /ai/chat (for cross-platform memory & autonomous tools) in parallel
+    final results = await Future.wait<dynamic>([
+      _analyzeHumanQuestion(text),
+      ApiService()
+          .post('/ai/chat', data: {'message': text, 'current_page': '/admin-chat'})
+          .then<dynamic>((r) => r.data)
+          .catchError((_) => null),
+    ]);
 
     if (!mounted) return;
 
+    final localAnswer = results[0] as Map<String, dynamic>?;
+    final backendData = results[1] is Map ? Map<String, dynamic>.from(results[1] as Map) : null;
+
     final backendReply = (backendData?['reply'] ?? backendData?['response'] ?? '').toString();
+    final backendType = (backendData?['type'] ?? 'text').toString();
+    final isBackendAutonomousToolOrDiag = backendData?['requires_confirmation'] == true ||
+        const {
+          'tool_confirmation',
+          'proactive_insights',
+          'system_diagnostics',
+          'pending_purchases',
+          'worker_reports',
+          'navigation',
+        }.contains(backendType);
+
     final backendIsFallback = backendReply.isEmpty ||
         backendReply.contains('found no exact matches') ||
         backendReply.contains("couldn't find") ||
         backendReply.contains('Nova AI');
 
-    if (localAnswer != null && (localAnswer['preferLocal'] == true || backendIsFallback)) {
+    if (isBackendAutonomousToolOrDiag && backendData != null && backendReply.isNotEmpty) {
+      setState(() {
+        _messages.add({
+          'isMe': false,
+          'text': backendReply,
+          'type': backendType,
+          'data': backendData['data'],
+          'actions': backendData['actions'],
+          'requires_confirmation': backendData['requires_confirmation'] == true,
+          'pending_tool': backendData['pending_tool'],
+        });
+        _isLoading = false;
+      });
+    } else if (localAnswer != null && (localAnswer['preferLocal'] == true || backendIsFallback)) {
       setState(() {
         _messages.add({
           'isMe': false,
           'text': localAnswer['reply'],
           'type': localAnswer['type'] ?? 'text',
           'data': localAnswer['data'],
+          'actions': backendData?['actions'],
         });
         _isLoading = false;
       });
@@ -208,8 +322,11 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
         _messages.add({
           'isMe': false,
           'text': backendReply.replaceAll('Nova AI', 'Agency AI'),
-          'type': backendData!['type'] ?? 'text',
+          'type': backendType,
           'data': backendData['data'],
+          'actions': backendData['actions'],
+          'requires_confirmation': backendData['requires_confirmation'] == true,
+          'pending_tool': backendData['pending_tool'],
         });
         _isLoading = false;
       });
@@ -1111,10 +1228,11 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
         'Ask me about any specific building, apartment code (e.g. "Apt A1"), tenant name, overdue rent, or maintenance ticket!';
   }
 
-  /// Renders Markdown-style `**bold**` cleanly without showing raw asterisks
+  /// Renders Markdown-style `**bold**` cleanly without showing raw asterisks (with RTL Arabic support)
   Widget _buildFormattedText(String text, {required bool isMe}) {
     final baseColor = isMe ? const Color(0xFF04130F) : AppTheme.textPrimary;
     final boldColor = isMe ? const Color(0xFF04130F) : AppTheme.primary;
+    final isRtl = RegExp(r'[\u0600-\u06FF]').hasMatch(text);
 
     final spans = <TextSpan>[];
     final regex = RegExp(r'\*\*(.+?)\*\*');
@@ -1141,15 +1259,18 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
       spans.add(TextSpan(text: text.substring(lastEnd)));
     }
 
-    return RichText(
-      text: TextSpan(
-        style: GoogleFonts.plusJakartaSans(
-          color: baseColor,
-          fontSize: 14,
-          fontWeight: isMe ? FontWeight.w700 : FontWeight.w500,
-          height: 1.45,
+    return Directionality(
+      textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+      child: RichText(
+        text: TextSpan(
+          style: GoogleFonts.plusJakartaSans(
+            color: baseColor,
+            fontSize: 14,
+            fontWeight: isMe ? FontWeight.w700 : FontWeight.w500,
+            height: 1.45,
+          ),
+          children: spans,
         ),
-        children: spans,
       ),
     );
   }
@@ -1158,12 +1279,180 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
     final type = msg['type'];
     final data = msg['data'];
 
-    if (type == 'widget_purchases_list' && data is List) {
+    // 1. Autonomous Tool Confirmation Guard Card
+    if (type == 'tool_confirmation' && msg['pending_tool'] is Map) {
+      final tool = Map<String, dynamic>.from(msg['pending_tool'] as Map);
+      return Container(
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.background,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppTheme.accent),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.verified_user_rounded, color: AppTheme.accent, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    (tool['summary'] ?? 'Confirm Action').toString(),
+                    style: GoogleFonts.outfit(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      foregroundColor: const Color(0xFF04130F),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: _toolBusy
+                        ? null
+                        : () => _executeBackendTool(
+                              (tool['tool_name'] ?? '').toString(),
+                              tool['target_id'],
+                              tool['parameters'] is Map
+                                  ? Map<String, dynamic>.from(tool['parameters'] as Map)
+                                  : <String, dynamic>{},
+                            ),
+                    icon: const Icon(Icons.check_circle_rounded, size: 16),
+                    label: Text(
+                      _toolBusy ? 'Executing...' : 'Confirm & Execute',
+                      style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w800, fontSize: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.danger,
+                    side: const BorderSide(color: AppTheme.danger),
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: _toolBusy ? null : () => _sendMessage(customText: 'Proactive insights'),
+                  child: Text(
+                    'Cancel',
+                    style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 2. Proactive Insights Cards
+    if (type == 'proactive_insights' && data is List) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: data.take(8).map((raw) {
+          final ins = Map<String, dynamic>.from(raw as Map);
+          final isHigh = ins['severity'] == 'high';
+          return Container(
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.background,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: isHigh ? AppTheme.danger : AppTheme.primary.withValues(alpha: 0.45)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        (ins['title'] ?? 'Insight').toString(),
+                        style: GoogleFonts.outfit(
+                          color: AppTheme.textPrimary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: (isHigh ? AppTheme.danger : AppTheme.primary).withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        (ins['metric'] ?? '').toString(),
+                        style: GoogleFonts.outfit(
+                          color: isHigh ? AppTheme.danger : AppTheme.primary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  (ins['description'] ?? '').toString(),
+                  style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary, fontSize: 11.5),
+                ),
+                if (ins['suggested_prompt'] != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: InkWell(
+                      onTap: () => _sendMessage(customText: ins['suggested_prompt'].toString()),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Inspect Details →',
+                          style: GoogleFonts.plusJakartaSans(
+                            color: AppTheme.primary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }).toList(),
+      );
+    }
+
+    // 3. Purchases & Pending Purchase Review Cards (With Interactive Approve/Reject)
+    if ((type == 'widget_purchases_list' || type == 'pending_purchases') && data is List) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: data.take(10).map((item) {
-          final p = item as Map<String, dynamic>;
+          final p = Map<String, dynamic>.from(item as Map);
           final isPending = (p['status'] ?? '').toString().contains('Pending');
+          final purchaseId = p['id'];
+          final amtDisplay = p['amount']?.toString().startsWith('CFA') == true
+              ? p['amount'].toString()
+              : 'CFA ${NumberFormat('#,##0').format(_parseNum(p['amount']))}';
+
           return Container(
             margin: const EdgeInsets.only(top: 8),
             padding: const EdgeInsets.all(12),
@@ -1174,44 +1463,105 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
                 color: isPending ? AppTheme.accent : AppTheme.border,
               ),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppTheme.accent.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.shopping_cart_rounded, color: AppTheme.accent, size: 18),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.accent.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.shopping_cart_rounded, color: AppTheme.accent, size: 18),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${p['building_name'] ?? 'Building'} • Apt ${p['apartment_number'] ?? p['apartment_code'] ?? ''}',
+                            style: GoogleFonts.outfit(
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                          Text(
+                            'Supplier: ${p['supplier'] ?? 'N/A'} • ${p['items'] ?? 'Expense'}',
+                            style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary, fontSize: 11.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      amtDisplay,
+                      style: GoogleFonts.outfit(
+                        color: AppTheme.primary,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13.5,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                if (isPending && purchaseId != null) ...[
+                  const SizedBox(height: 10),
+                  Row(
                     children: [
-                      Text(
-                        '${p['building_name']} • Apt ${p['apartment_number']}',
-                        style: GoogleFonts.outfit(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13.5,
+                      Expanded(
+                        child: InkWell(
+                          onTap: _toolBusy
+                              ? null
+                              : () => _executeBackendTool('review_purchase', purchaseId, {'status': 'Approved'}),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 7),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.primary.withValues(alpha: 0.5)),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              '✓ Approve Purchase',
+                              style: GoogleFonts.plusJakartaSans(
+                                color: AppTheme.primary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                      Text(
-                        'Supplier: ${p['supplier']} • ${p['items']}',
-                        style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary, fontSize: 11.5),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: InkWell(
+                          onTap: _toolBusy
+                              ? null
+                              : () => _executeBackendTool('review_purchase', purchaseId, {'status': 'Rejected'}),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 7),
+                            decoration: BoxDecoration(
+                              color: AppTheme.danger.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.danger.withValues(alpha: 0.45)),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              '✕ Reject',
+                              style: GoogleFonts.plusJakartaSans(
+                                color: AppTheme.danger,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                ),
-                Text(
-                  p['amount']?.toString() ?? 'CFA 0',
-                  style: GoogleFonts.outfit(
-                    color: AppTheme.primary,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 13.5,
-                  ),
-                ),
+                ],
               ],
             ),
           );
@@ -1472,10 +1822,21 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: 'System Diagnostics',
+            icon: const Icon(Icons.health_and_safety_rounded, color: AppTheme.accent, size: 21),
+            onPressed: () => _sendMessage(customText: 'Run system diagnostics'),
+          ),
+          IconButton(
+            tooltip: 'Reset Conversation Memory',
+            icon: const Icon(Icons.restart_alt_rounded, color: AppTheme.textSecondary, size: 21),
+            onPressed: _clearConversationHistory,
+          ),
+          IconButton(
             tooltip: 'Sync Database',
-            icon: const Icon(Icons.sync_rounded, color: AppTheme.primary),
+            icon: const Icon(Icons.sync_rounded, color: AppTheme.primary, size: 21),
             onPressed: () {
               ApiService().clearCache();
+              _loadSyncedHistory();
               _syncDatabaseKnowledgeGraph();
             },
           ),
@@ -1531,6 +1892,45 @@ class _AdminChatScreenState extends ConsumerState<AdminChatScreen> {
                                 if (msg['type'] != null && msg['type'] != 'text') ...[
                                   const SizedBox(height: 10),
                                   _buildWidget(msg),
+                                ],
+                                if (!isMe && msg['actions'] is List && (msg['actions'] as List).isNotEmpty) ...[
+                                  const SizedBox(height: 10),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 6,
+                                    children: (msg['actions'] as List).map((actRaw) {
+                                      if (actRaw is! Map) return const SizedBox.shrink();
+                                      final label = (actRaw['label'] ?? 'Open').toString();
+                                      final route = (actRaw['mobile_route'] ?? actRaw['route'] ?? '').toString();
+                                      if (route.isEmpty) return const SizedBox.shrink();
+                                      return InkWell(
+                                        onTap: () => context.push(route),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: AppTheme.primary.withValues(alpha: 0.14),
+                                            borderRadius: BorderRadius.circular(10),
+                                            border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4)),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(Icons.open_in_new_rounded, color: AppTheme.primary, size: 13),
+                                              const SizedBox(width: 5),
+                                              Text(
+                                                label,
+                                                style: GoogleFonts.plusJakartaSans(
+                                                  color: AppTheme.primary,
+                                                  fontWeight: FontWeight.w800,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
                                 ],
                               ],
                             ),

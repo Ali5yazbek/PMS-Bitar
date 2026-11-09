@@ -81,6 +81,17 @@ class ACMaintenanceController {
 
         // Merge both lists: tenant tickets prioritized, followed by routine cleanings
         $allTasks = array_merge($tenantTickets, $acTasks);
+        if (class_exists('TenantMaintenanceController')) {
+            foreach ($allTasks as &$row) {
+                if (!empty($row['before_photo']) && strlen($row['before_photo']) > 45000) {
+                    $row['before_photo'] = TenantMaintenanceController::compressBase64Photo($row['before_photo']);
+                }
+                if (!empty($row['after_photo']) && strlen($row['after_photo']) > 45000) {
+                    $row['after_photo'] = TenantMaintenanceController::compressBase64Photo($row['after_photo']);
+                }
+            }
+            unset($row);
+        }
 
         echo json_encode($allTasks);
     }
@@ -149,6 +160,17 @@ class ACMaintenanceController {
         $acHistory = $acStmt ? $acStmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
         $allHistory = array_merge($ticketHistory, $acHistory);
+        if (class_exists('TenantMaintenanceController')) {
+            foreach ($allHistory as &$row) {
+                if (!empty($row['before_photo']) && strlen($row['before_photo']) > 45000) {
+                    $row['before_photo'] = TenantMaintenanceController::compressBase64Photo($row['before_photo']);
+                }
+                if (!empty($row['after_photo']) && strlen($row['after_photo']) > 45000) {
+                    $row['after_photo'] = TenantMaintenanceController::compressBase64Photo($row['after_photo']);
+                }
+            }
+            unset($row);
+        }
         echo json_encode($allHistory);
     }
 
@@ -166,6 +188,10 @@ class ACMaintenanceController {
         $taskType = $data['task_type'] ?? null;
         $beforePhoto = $data['before_photo'] ?? ($data['before_image'] ?? null);
         $afterPhoto = $data['after_photo'] ?? ($data['after_image'] ?? null);
+        if (class_exists('TenantMaintenanceController')) {
+            $beforePhoto = TenantMaintenanceController::compressBase64Photo($beforePhoto) ?? $beforePhoto;
+            $afterPhoto = TenantMaintenanceController::compressBase64Photo($afterPhoto) ?? $afterPhoto;
+        }
         $notes = !empty($data['notes']) ? $data['notes'] : (!empty($data['worker_notes']) ? $data['worker_notes'] : 'Maintenance completed with photo documentation.');
 
         if (empty($beforePhoto) || empty($afterPhoto)) {
@@ -202,6 +228,18 @@ class ACMaintenanceController {
             try {
                 $stmt->execute([$worker_id, $beforePhoto, $afterPhoto, $notes, $taskId]);
                 AuditLogger::log('UPDATE', 'MaintenanceTicket', $taskId, "Tenant ticket #{$taskId} resolved by worker #{$worker_id}");
+                try {
+                    $uStmt = $this->db->prepare("SELECT name FROM users WHERE id = ? LIMIT 1");
+                    $uStmt->execute([$worker_id]);
+                    $workerName = $uStmt->fetchColumn() ?: 'Maintenance Worker';
+                    $adminsStmt = $this->db->query("SELECT id FROM users WHERE role IN ('admin', 'super_admin', 'manager') LIMIT 10");
+                    foreach ($adminsStmt->fetchAll(PDO::FETCH_COLUMN) as $adminId) {
+                        $notifTitle = "🔧 {$workerName} completed Maintenance Task — waiting for your response";
+                        $notifMsg = "{$workerName} has completed maintenance ticket #{$taskId} — waiting for your response.\nWhat is it: Tenant Maintenance Task • Notes: {$notes}";
+                        $notifStmt = $this->db->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, 'tenant_maintenance')");
+                        $notifStmt->execute([$adminId, $notifTitle, $notifMsg]);
+                    }
+                } catch (\Throwable $ne) {}
                 echo json_encode(['message' => 'Tenant maintenance ticket completed successfully', 'status' => 'Resolved']);
             } catch (Exception $e) {
                 http_response_code(500);
@@ -220,6 +258,18 @@ class ACMaintenanceController {
         try {
             $stmt->execute([$beforePhoto, $afterPhoto, $notes, $worker_id, $taskId]);
             AuditLogger::log('UPDATE', 'ACMaintenanceTask', $taskId, "Routine AC task #{$taskId} submitted for approval by worker #{$worker_id}");
+            try {
+                $uStmt = $this->db->prepare("SELECT name FROM users WHERE id = ? LIMIT 1");
+                $uStmt->execute([$worker_id]);
+                $workerName = $uStmt->fetchColumn() ?: 'Maintenance Worker';
+                $adminsStmt = $this->db->query("SELECT id FROM users WHERE role IN ('admin', 'super_admin', 'manager') LIMIT 10");
+                foreach ($adminsStmt->fetchAll(PDO::FETCH_COLUMN) as $adminId) {
+                    $notifTitle = "❄️ {$workerName} completed AC Task — waiting for your response";
+                    $notifMsg = "{$workerName} has completed AC maintenance task #{$taskId} — waiting for your response.\nWhat is it: AC Maintenance Submission • Notes: {$notes}";
+                    $notifStmt = $this->db->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, 'maintenance_ac')");
+                    $notifStmt->execute([$adminId, $notifTitle, $notifMsg]);
+                }
+            } catch (\Throwable $ne) {}
             echo json_encode(['message' => 'Task submitted successfully']);
         } catch (Exception $e) {
             http_response_code(500);
@@ -241,14 +291,53 @@ class ACMaintenanceController {
             WHERE t.status IN ('Pending_Approval', 'Pending Approval', 'Pending')
             ORDER BY COALESCE(t.submission_date, t.created_at) DESC
         ");
-        echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+        $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+        if (class_exists('TenantMaintenanceController')) {
+            foreach ($rows as &$row) {
+                $changed = false;
+                if (!empty($row['before_photo']) && strlen($row['before_photo']) > 45000) {
+                    $c = TenantMaintenanceController::compressBase64Photo($row['before_photo']);
+                    if ($c !== null && $c !== $row['before_photo']) {
+                        $row['before_photo'] = $c;
+                        $changed = true;
+                    }
+                }
+                if (!empty($row['after_photo']) && strlen($row['after_photo']) > 45000) {
+                    $c = TenantMaintenanceController::compressBase64Photo($row['after_photo']);
+                    if ($c !== null && $c !== $row['after_photo']) {
+                        $row['after_photo'] = $c;
+                        $changed = true;
+                    }
+                }
+                if ($changed && !empty($row['id'])) {
+                    try {
+                        $upd = $this->db->prepare("UPDATE ac_maintenance_tasks SET before_photo = ?, after_photo = ? WHERE id = ?");
+                        $upd->execute([$row['before_photo'], $row['after_photo'], $row['id']]);
+                    } catch (\Throwable $e) {}
+                }
+            }
+            unset($row);
+        }
+        echo json_encode($rows);
     }
 
     public function taskHistory() {
         AuthMiddleware::requireLogin();
         
         $stmt = $this->db->query("
-            SELECT t.*, a.code as apartment_code, b.name as building_name, u.name as worker_name
+            SELECT 
+                t.id,
+                t.apartment_id,
+                t.worker_id,
+                t.scheduled_date,
+                t.submission_date,
+                t.completion_date,
+                t.status,
+                t.notes,
+                t.created_at,
+                a.code as apartment_code,
+                b.name as building_name,
+                u.name as worker_name
             FROM ac_maintenance_tasks t
             JOIN apartments a ON t.apartment_id = a.id
             JOIN buildings b ON a.building_id = b.id
@@ -347,83 +436,146 @@ class ACMaintenanceController {
         
         $startDate = !empty($_GET['start_date']) ? $_GET['start_date'] : null;
         $endDate = !empty($_GET['end_date']) ? $_GET['end_date'] : null;
+        $includePhotos = !empty($_GET['include_photos']);
 
-        // Find all maintenance workers
-        $stmtWorkers = $this->db->prepare("SELECT id, name FROM users WHERE role = 'maintenance'");
-        $stmtWorkers->execute();
-        $workers = $stmtWorkers->fetchAll(PDO::FETCH_ASSOC);
+        // Find all maintenance workers + any user who has handled maintenance tasks
+        $workers = [];
+        try {
+            $stmtWorkers = $this->db->query("
+                SELECT DISTINCT u.id, u.name
+                FROM users u
+                WHERE LOWER(TRIM(u.role)) IN ('maintenance', 'technician', 'worker', 'field_tech', 'ac_tech')
+                   OR u.id IN (SELECT DISTINCT worker_id FROM ac_maintenance_tasks WHERE worker_id IS NOT NULL)
+                   OR u.id IN (SELECT DISTINCT worker_id FROM tenant_maintenance_tickets WHERE worker_id IS NOT NULL)
+                ORDER BY u.id ASC
+            ");
+            $workers = $stmtWorkers ? $stmtWorkers->fetchAll(PDO::FETCH_ASSOC) : [];
+        } catch (\Throwable $e) {
+            $stmtWorkers = $this->db->prepare("SELECT id, name FROM users WHERE LOWER(TRIM(role)) = 'maintenance'");
+            $stmtWorkers->execute();
+            $workers = $stmtWorkers->fetchAll(PDO::FETCH_ASSOC);
+        }
 
         $reports = [];
+        $acPhotoCols = $includePhotos ? "t.before_photo, t.after_photo," : "NULL AS before_photo, NULL AS after_photo,";
+        $tmtPhotoCols = $includePhotos ? "tmt.before_photo, tmt.after_photo," : "NULL AS before_photo, NULL AS after_photo,";
 
         foreach ($workers as $worker) {
             $workerId = $worker['id'];
 
             // 1. Routine AC tasks
-            $acQuery = "
-                SELECT 
-                    t.id,
-                    'routine_ac' AS task_type,
-                    'Routine AC Cleaning' AS title,
-                    t.notes,
-                    t.status,
-                    t.before_photo,
-                    t.after_photo,
-                    COALESCE(t.completion_date, t.submission_date) AS submission_date,
-                    t.completion_date,
-                    t.created_at,
-                    a.code as apartment_code, 
-                    b.name as building_name
-                FROM ac_maintenance_tasks t
-                JOIN apartments a ON t.apartment_id = a.id
-                JOIN buildings b ON a.building_id = b.id
-                WHERE t.worker_id = ?
-            ";
-            $acParams = [$workerId];
-            if (!empty($startDate) && !empty($endDate)) {
-                $acQuery .= " AND DATE(COALESCE(t.completion_date, t.submission_date, t.created_at)) BETWEEN ? AND ?";
-                $acParams[] = $startDate;
-                $acParams[] = $endDate;
+            $acTasks = [];
+            try {
+                $acQuery = "
+                    SELECT 
+                        t.id,
+                        'routine_ac' AS task_type,
+                        'Routine AC Cleaning' AS title,
+                        t.notes,
+                        t.status,
+                        {$acPhotoCols}
+                        COALESCE(t.completion_date, t.submission_date, t.created_at) AS submission_date,
+                        t.completion_date,
+                        t.created_at,
+                        a.code as apartment_code, 
+                        b.name as building_name
+                    FROM ac_maintenance_tasks t
+                    JOIN apartments a ON t.apartment_id = a.id
+                    JOIN buildings b ON a.building_id = b.id
+                    WHERE t.worker_id = ?
+                ";
+                $acParams = [$workerId];
+                if (!empty($startDate) && !empty($endDate)) {
+                    $acQuery .= " AND DATE(COALESCE(t.completion_date, t.submission_date, t.created_at)) BETWEEN ? AND ?";
+                    $acParams[] = $startDate;
+                    $acParams[] = $endDate;
+                }
+                $acQuery .= " ORDER BY t.id DESC";
+                $acStmt = $this->db->prepare($acQuery);
+                $acStmt->execute($acParams);
+                $acTasks = $acStmt ? $acStmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            } catch (\Throwable $e) {
+                $acTasks = [];
             }
-            $acStmt = $this->db->prepare($acQuery);
-            $acStmt->execute($acParams);
-            $acTasks = $acStmt ? $acStmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
-            // 2. Tenant maintenance tickets
-            $ticketQuery = "
-                SELECT 
-                    tmt.id,
-                    'tenant_ticket' AS task_type,
-                    tmt.title,
-                    COALESCE(tmt.worker_notes, tmt.description) AS notes,
-                    tmt.status,
-                    tmt.before_photo,
-                    tmt.after_photo,
-                    COALESCE(tmt.completion_date, tmt.resolved_at, tmt.created_at) AS submission_date,
-                    tmt.completion_date,
-                    tmt.created_at,
-                    COALESCE(a.code, 'N/A') as apartment_code, 
-                    COALESCE(b.name, 'Building') as building_name
-                FROM tenant_maintenance_tickets tmt
-                LEFT JOIN apartments a ON tmt.apartment_id = a.id
-                LEFT JOIN buildings b ON a.building_id = b.id
-                WHERE tmt.worker_id = ?
-            ";
-            $ticketParams = [$workerId];
-            if (!empty($startDate) && !empty($endDate)) {
-                $ticketQuery .= " AND DATE(COALESCE(tmt.completion_date, tmt.resolved_at, tmt.updated_at, tmt.created_at)) BETWEEN ? AND ?";
-                $ticketParams[] = $startDate;
-                $ticketParams[] = $endDate;
+            // 2. Tenant maintenance tickets (with schema-safe fallback)
+            $ticketTasks = [];
+            try {
+                $ticketQuery = "
+                    SELECT 
+                        tmt.id,
+                        'tenant_ticket' AS task_type,
+                        tmt.title,
+                        COALESCE(tmt.worker_notes, tmt.description) AS notes,
+                        tmt.status,
+                        {$tmtPhotoCols}
+                        COALESCE(tmt.completion_date, tmt.resolved_at, tmt.created_at) AS submission_date,
+                        tmt.completion_date,
+                        tmt.created_at,
+                        COALESCE(a.code, 'N/A') as apartment_code, 
+                        COALESCE(b.name, 'Building') as building_name
+                    FROM tenant_maintenance_tickets tmt
+                    LEFT JOIN apartments a ON tmt.apartment_id = a.id
+                    LEFT JOIN buildings b ON a.building_id = b.id
+                    WHERE tmt.worker_id = ?
+                ";
+                $ticketParams = [$workerId];
+                if (!empty($startDate) && !empty($endDate)) {
+                    $ticketQuery .= " AND DATE(COALESCE(tmt.completion_date, tmt.resolved_at, tmt.created_at)) BETWEEN ? AND ?";
+                    $ticketParams[] = $startDate;
+                    $ticketParams[] = $endDate;
+                }
+                $ticketQuery .= " ORDER BY tmt.id DESC";
+                $ticketStmt = $this->db->prepare($ticketQuery);
+                $ticketStmt->execute($ticketParams);
+                $ticketTasks = $ticketStmt ? $ticketStmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            } catch (\Throwable $e) {
+                try {
+                    $fallbackStmt = $this->db->prepare("
+                        SELECT 
+                            tmt.id,
+                            'tenant_ticket' AS task_type,
+                            tmt.title,
+                            tmt.description AS notes,
+                            tmt.status,
+                            NULL AS before_photo,
+                            NULL AS after_photo,
+                            COALESCE(tmt.resolved_at, tmt.created_at) AS submission_date,
+                            tmt.resolved_at AS completion_date,
+                            tmt.created_at,
+                            COALESCE(a.code, 'N/A') as apartment_code, 
+                            COALESCE(b.name, 'Building') as building_name
+                        FROM tenant_maintenance_tickets tmt
+                        LEFT JOIN apartments a ON tmt.apartment_id = a.id
+                        LEFT JOIN buildings b ON a.building_id = b.id
+                        WHERE tmt.worker_id = ?
+                        ORDER BY tmt.id DESC
+                    ");
+                    $fallbackStmt->execute([$workerId]);
+                    $ticketTasks = $fallbackStmt ? $fallbackStmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                } catch (\Throwable $e2) {
+                    $ticketTasks = [];
+                }
             }
-            $ticketStmt = $this->db->prepare($ticketQuery);
-            $ticketStmt->execute($ticketParams);
-            $ticketTasks = $ticketStmt ? $ticketStmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
             $allTasks = array_merge($ticketTasks, $acTasks);
+            $completedCount = 0;
+            $pendingCount = 0;
+            foreach ($allTasks as $tk) {
+                $st = strtolower(trim($tk['status'] ?? ''));
+                if (in_array($st, ['completed', 'approved', 'resolved', 'closed'], true)) {
+                    $completedCount++;
+                } else {
+                    $pendingCount++;
+                }
+            }
 
             $reports[] = [
                 'worker_id' => $worker['id'],
                 'worker_name' => $worker['name'],
                 'tasks_count' => count($allTasks),
+                'completed_count' => $completedCount,
+                'pending_count' => $pendingCount,
                 'tasks' => $allTasks
             ];
         }

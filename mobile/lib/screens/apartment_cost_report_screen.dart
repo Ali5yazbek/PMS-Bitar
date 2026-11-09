@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import '../services/purchase_api.dart';
 import '../services/camera_service.dart';
 import '../widgets/mobile/enterprise_mobile_scaffold.dart';
+import '../widgets/mobile/receipt_image_viewer.dart';
 
 final purchasesListProvider = FutureProvider.family.autoDispose<List<dynamic>, String?>((ref, dateFilter) async {
   return await PurchaseApi.instance.getPurchases(date: dateFilter);
@@ -18,6 +19,20 @@ final buildingsSuggestionsProvider = FutureProvider<List<dynamic>>((ref) async {
     if (data is List) return data;
     if (data is Map<String, dynamic>) {
       return (data['buildings'] ?? data['data'] ?? []) as List<dynamic>;
+    }
+    return [];
+  } catch (_) {
+    return [];
+  }
+});
+
+final apartmentsSuggestionsProvider = FutureProvider<List<dynamic>>((ref) async {
+  try {
+    final res = await ApiService().get('/apartments');
+    final data = res.data;
+    if (data is List) return data;
+    if (data is Map<String, dynamic>) {
+      return (data['apartments'] ?? data['data'] ?? []) as List<dynamic>;
     }
     return [];
   } catch (_) {
@@ -84,7 +99,7 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
               loading: () => const Center(child: CircularProgressIndicator(color: AppTheme.primary)),
               error: (e, _) => const SizedBox.shrink(),
               data: (list) {
-                final pendingCount = list.where((p) => p['status'] == 'Pending Review').length;
+                final pendingCount = list.where((p) => (p['status'] ?? '').toString().contains('Pending')).length;
                 final rejectedCount = list.where((p) => p['status'] == 'Rejected').length;
 
                 return Row(
@@ -217,6 +232,14 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                   itemCount: list.length,
                   itemBuilder: (context, index) {
                     final item = list[index];
+                    final status = (item['status'] ?? 'Pending Review').toString();
+                    final statusColor = status == 'Approved'
+                        ? AppTheme.primary
+                        : (status == 'Rejected' ? AppTheme.danger : AppTheme.accent);
+                    final receiptImg = (item['receipt_image'] ?? '').toString().trim();
+                    final bld = (item['building_name'] ?? 'Building').toString();
+                    final apt = (item['apartment_number'] ?? item['apartment_code'] ?? '').toString();
+
                     return Container(
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.all(16),
@@ -231,7 +254,31 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('${item['building_name']} Apt ${item['apartment_number']}', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        '$bld Apt $apt',
+                                        style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: statusColor.withValues(alpha: 0.16),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        status,
+                                        style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                               Text(item['amount'] ?? 'CFA 0', style: GoogleFonts.outfit(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 15)),
                             ],
                           ),
@@ -239,6 +286,62 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                           Text('Supplier: ${item['supplier'] ?? 'Hardware Store'} • Items: ${item['items'] ?? 'General Material'}', style: TextStyle(color: Colors.blueGrey.shade300, fontSize: 12)),
                           const SizedBox(height: 6),
                           Text('Date: ${item['purchase_date'] ?? 'Today'}', style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 11)),
+                          if (receiptImg.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            InkWell(
+                              onTap: () => ReceiptImageViewer.showLightbox(
+                                context,
+                                receiptImg,
+                                title: '$bld • Apt $apt Receipt',
+                                subtitle: 'Supplier: ${item['supplier'] ?? 'Supplier'} • ${item['amount'] ?? ''}',
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF060B10),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: SizedBox(
+                                        width: 52,
+                                        height: 52,
+                                        child: ReceiptImageViewer.buildImage(receiptImg, width: 52, height: 52),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Receipt Photo Attached',
+                                            style: GoogleFonts.outfit(
+                                              color: AppTheme.primary,
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          Text(
+                                            'Tap to view full receipt image',
+                                            style: GoogleFonts.plusJakartaSans(
+                                              color: Colors.blueGrey.shade300,
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const Icon(Icons.zoom_in_rounded, color: AppTheme.primary, size: 20),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     );
@@ -260,6 +363,8 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
     final itemsCtrl = TextEditingController();
     final notesCtrl = TextEditingController();
     List<String> receiptPhotos = [];
+    int? selectedApartmentId;
+    bool isSubmitting = false;
 
     showModalBottomSheet(
       context: context,
@@ -287,8 +392,15 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                     Consumer(
                       builder: (context, ref, _) {
                         final bAsync = ref.watch(buildingsSuggestionsProvider);
-                        final list = bAsync.value ?? [];
-                        final names = list.map((b) => (b['name'] ?? b['building_name'] ?? '').toString()).where((n) => n.isNotEmpty).toSet().toList();
+                        final aAsync = ref.watch(apartmentsSuggestionsProvider);
+                        final bList = bAsync.value ?? [];
+                        final aList = aAsync.value ?? [];
+
+                        final names = bList
+                            .map((b) => (b['name'] ?? b['building_name'] ?? '').toString())
+                            .where((n) => n.isNotEmpty)
+                            .toSet()
+                            .toList();
                         if (names.isEmpty) {
                           names.addAll(['Galaxy', 'Bitar Tower', 'Palace Building']);
                         }
@@ -296,12 +408,37 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                           buildingCtrl.text = names.first;
                         }
 
+                        // Filter apartments belonging to the selected building
+                        final selectedBldLower = buildingCtrl.text.trim().toLowerCase();
+                        final buildingApts = aList.where((a) {
+                          if (a is! Map) return false;
+                          final bName = (a['building_name'] ?? '').toString().trim().toLowerCase();
+                          return bName == selectedBldLower ||
+                              bName.contains(selectedBldLower) ||
+                              selectedBldLower.contains(bName);
+                        }).toList();
+
+                        if (buildingApts.isNotEmpty) {
+                          final codes = buildingApts
+                              .map((a) => (a['code'] ?? a['apartment_code'] ?? '').toString())
+                              .where((c) => c.isNotEmpty)
+                              .toList();
+                          if (codes.isNotEmpty && !codes.contains(aptCtrl.text)) {
+                            aptCtrl.text = codes.first;
+                          }
+                          final matchedApt = buildingApts.firstWhere(
+                            (a) => (a['code'] ?? a['apartment_code'] ?? '').toString() == aptCtrl.text,
+                            orElse: () => buildingApts.first,
+                          );
+                          selectedApartmentId = int.tryParse((matchedApt['id'] ?? '').toString());
+                        }
+
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // Building Selector with Suggestions
+                              // Building Selector
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -329,7 +466,10 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                                           }).toList(),
                                           onChanged: (val) {
                                             if (val != null) {
-                                              setModalState(() => buildingCtrl.text = val);
+                                              setModalState(() {
+                                                buildingCtrl.text = val;
+                                                selectedApartmentId = null;
+                                              });
                                             }
                                           },
                                         ),
@@ -339,7 +479,57 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                                 ),
                               ),
                               const SizedBox(width: 10),
-                              Expanded(child: _buildInput('Apartment', aptCtrl)),
+                              // Apartment Selector (Dropdown of real apartments in selected building, or text input fallback)
+                              Expanded(
+                                child: buildingApts.isNotEmpty
+                                    ? Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text('Apartment', style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12)),
+                                          const SizedBox(height: 4),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF060B10),
+                                              borderRadius: BorderRadius.circular(12),
+                                              border: Border.all(color: const Color(0xFF1D3347)),
+                                            ),
+                                            child: DropdownButtonHideUnderline(
+                                              child: DropdownButton<String>(
+                                                value: buildingApts
+                                                        .map((a) => (a['code'] ?? a['apartment_code'] ?? '').toString())
+                                                        .contains(aptCtrl.text)
+                                                    ? aptCtrl.text
+                                                    : (buildingApts.first['code'] ?? buildingApts.first['apartment_code'] ?? 'A1').toString(),
+                                                dropdownColor: const Color(0xFF060B10),
+                                                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                                isExpanded: true,
+                                                items: buildingApts.map((a) {
+                                                  final code = (a['code'] ?? a['apartment_code'] ?? '').toString();
+                                                  return DropdownMenuItem<String>(
+                                                    value: code,
+                                                    child: Text('Apt $code', overflow: TextOverflow.ellipsis),
+                                                  );
+                                                }).toList(),
+                                                onChanged: (val) {
+                                                  if (val != null) {
+                                                    final matched = buildingApts.firstWhere(
+                                                      (a) => (a['code'] ?? a['apartment_code'] ?? '').toString() == val,
+                                                      orElse: () => buildingApts.first,
+                                                    );
+                                                    setModalState(() {
+                                                      aptCtrl.text = val;
+                                                      selectedApartmentId = int.tryParse((matched['id'] ?? '').toString());
+                                                    });
+                                                  }
+                                                },
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : _buildInput('Apartment', aptCtrl),
+                              ),
                             ],
                           ),
                         );
@@ -351,19 +541,19 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                     _buildInput('Notes / Description', notesCtrl, isMultiline: true),
 
                     const SizedBox(height: 12),
-                    Text('Upload Receipt Evidence (Camera / Gallery / PDF)', style: TextStyle(color: Colors.blueGrey.shade300, fontSize: 12, fontWeight: FontWeight.bold)),
+                    Text('Upload Receipt Evidence (Camera / Gallery)', style: TextStyle(color: Colors.blueGrey.shade300, fontSize: 12, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
 
                     Row(
                       children: [
                         ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF00A884)),
+                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A884)),
                           icon: const Icon(Icons.camera_alt, size: 16, color: Colors.white),
                           label: const Text('Camera', style: TextStyle(color: Colors.white)),
                           onPressed: () async {
-                            final base64 = await CameraService.instance.capturePhotoFromCamera();
-                            if (base64 != null) {
-                              setModalState(() => receiptPhotos.add(base64));
+                            final photo = await CameraService.instance.capturePhotoFromCamera();
+                            if (photo != null) {
+                              setModalState(() => receiptPhotos.add(photo));
                             }
                           },
                         ),
@@ -373,15 +563,73 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                           label: const Text('Gallery', style: TextStyle(color: Colors.white)),
                           onPressed: () async {
                             final list = await CameraService.instance.pickMultipleFromGallery();
-                            setModalState(() => receiptPhotos.addAll(list));
+                            if (list.isNotEmpty) {
+                              setModalState(() => receiptPhotos.addAll(list));
+                            }
                           },
                         ),
                       ],
                     ),
 
                     if (receiptPhotos.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text('✓ ${receiptPhotos.length} receipt photos attached', style: const TextStyle(color: Colors.greenAccent, fontSize: 11)),
+                      const SizedBox(height: 10),
+                      Text(
+                        '✓ ${receiptPhotos.length} receipt photo(s) attached (tap to preview):',
+                        style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 76,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: receiptPhotos.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 10),
+                          itemBuilder: (context, idx) {
+                            final refStr = receiptPhotos[idx];
+                            return Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                GestureDetector(
+                                  onTap: () => ReceiptImageViewer.showLightbox(
+                                    context,
+                                    refStr,
+                                    title: 'Attached Receipt Preview',
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: Container(
+                                      width: 74,
+                                      height: 74,
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: AppTheme.primary),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: ReceiptImageViewer.buildImage(refStr, width: 74, height: 74),
+                                    ),
+                                  ),
+                                ),
+                                Positioned(
+                                  top: -6,
+                                  right: -6,
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      setModalState(() => receiptPhotos.removeAt(idx));
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.all(3),
+                                      decoration: const BoxDecoration(
+                                        color: Colors.redAccent,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(Icons.close, size: 12, color: Colors.white),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
                     ],
 
                     const SizedBox(height: 20),
@@ -393,29 +641,54 @@ class _ApartmentCostReportScreenState extends ConsumerState<ApartmentCostReportS
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
-                        onPressed: () async {
-                          if (supplierCtrl.text.isEmpty || amountCtrl.text.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter supplier and amount')));
-                            return;
-                          }
+                        onPressed: isSubmitting
+                            ? null
+                            : () async {
+                                if (supplierCtrl.text.trim().isEmpty || amountCtrl.text.trim().isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Please enter supplier and amount')),
+                                  );
+                                  return;
+                                }
+                                if (receiptPhotos.isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Please attach a receipt photo (Camera or Gallery)')),
+                                  );
+                                  return;
+                                }
 
-                          await PurchaseApi.instance.submitPurchase({
-                            'building': buildingCtrl.text,
-                            'apartment': aptCtrl.text,
-                            'supplier': supplierCtrl.text,
-                            'amount': amountCtrl.text,
-                            'items': itemsCtrl.text,
-                            'notes': notesCtrl.text,
-                            'receipts': receiptPhotos,
-                          });
+                                setModalState(() => isSubmitting = true);
+                                final ok = await PurchaseApi.instance.submitPurchase({
+                                  'apartment_id': selectedApartmentId,
+                                  'building': buildingCtrl.text,
+                                  'apartment': aptCtrl.text,
+                                  'supplier': supplierCtrl.text,
+                                  'amount': amountCtrl.text,
+                                  'items': itemsCtrl.text,
+                                  'notes': notesCtrl.text,
+                                  'receipts': receiptPhotos,
+                                });
 
-                          Navigator.pop(ctx);
-                          final todayStr = '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
-                          setState(() => _selectedDateStr = todayStr);
-                          ref.invalidate(purchasesListProvider(todayStr));
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Purchase submitted successfully ✓'), backgroundColor: Colors.green));
-                        },
-                        child: const Text('Submit Purchase', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                if (!ctx.mounted) return;
+                                Navigator.pop(ctx);
+                                final todayStr = '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}';
+                                setState(() => _selectedDateStr = todayStr);
+                                ref.invalidate(purchasesListProvider(todayStr));
+                                ref.invalidate(purchasesListProvider('all'));
+                                ScaffoldMessenger.of(this.context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(ok ? 'Purchase & receipt submitted for Admin review ✓' : 'Saved to offline queue ✓'),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              },
+                        child: isSubmitting
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Text('Submit Purchase', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                       ),
                     ),
                   ],

@@ -156,10 +156,12 @@ class _ContractsScreenState extends ConsumerState<ContractsScreen> with SingleTi
                   TabBar(
                     controller: _tabController,
                     isScrollable: true,
+                    tabAlignment: TabAlignment.start,
                     indicatorColor: AppTheme.primary,
-                    labelColor: Colors.white,
-                    unselectedLabelColor: Colors.blueGrey.shade400,
-                    labelStyle: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 12),
+                    dividerColor: Colors.transparent,
+                    labelColor: AppTheme.textPrimary,
+                    unselectedLabelColor: AppTheme.textMuted,
+                    labelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 12.5),
                     tabs: const [
                       Tab(text: 'All Contracts'),
                       Tab(text: 'Active Leases'),

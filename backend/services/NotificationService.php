@@ -16,7 +16,7 @@ class NotificationService {
 
     public function notifyAgentApproved(int $agentUserId, array $reading, string $type): void {
         $locationInfo = $this->buildLocationLabel($reading, $type);
-        $title   = '✅ Reading Approved';
+        $title   = 'Reading Approved';
         $message = "Your meter reading for {$locationInfo} has been approved. "
                  . "The invoice has been generated automatically.";
         $this->insertNotification($agentUserId, $title, $message, 'agent_reading_accepted', $reading['id'] ?? null);
@@ -32,7 +32,7 @@ class NotificationService {
     ): void {
         $locationInfo = $this->buildLocationLabel($reading, $type);
         $reasonLabel  = $this->getRejectionLabel($reasonCode);
-        $title   = '❌ Reading Rejected';
+        $title   = 'Reading Rejected';
         $message = "Your reading for {$locationInfo} was rejected.\n"
                  . "Reason: {$reasonLabel}\n"
                  . ($comment ? "Comment: {$comment}\n" : '')
@@ -43,7 +43,7 @@ class NotificationService {
         // Action-required follow-up
         $this->insertNotification(
             $agentUserId,
-            '🚨 Action Required',
+            'Action Required',
             "A new reading is required for {$locationInfo}. Tap to resubmit.",
             'agent_action_required',
             $reading['id'] ?? null
@@ -52,7 +52,7 @@ class NotificationService {
 
     public function notifyAgentCorrected(int $agentUserId, array $reading, string $type, float $original, float $corrected): void {
         $locationInfo = $this->buildLocationLabel($reading, $type);
-        $title   = '✏️ Reading Approved with Correction';
+        $title   = 'Reading Approved with Correction';
         $message = "Your reading for {$locationInfo} was approved.\n"
                  . "Administrator corrected the submitted reading based on the uploaded meter image.\n"
                  . "Original: {$original} kWh → Corrected: {$corrected} kWh";
@@ -64,7 +64,7 @@ class NotificationService {
     public function notifyAdminsNewCriticalReading(array $reading, string $type): void {
         $admins = $this->getAdminUsers();
         $locationInfo = $this->buildLocationLabel($reading, $type);
-        $title   = '🔴 Critical Reading Requires Review';
+        $title   = 'Critical Reading Requires Review';
         $message = "A new reading for {$locationInfo} has been flagged as HIGH RISK. "
                  . "Confidence score: {$reading['confidence_score']}%. Immediate review recommended.";
         foreach ($admins as $admin) {
@@ -73,7 +73,7 @@ class NotificationService {
     }
 
     public function notifyAdminsBulkComplete(int $adminId, int $approved, int $rejected, int $skipped): void {
-        $title   = '✅ Bulk Approval Complete';
+        $title   = 'Bulk Approval Complete';
         $message = "Bulk action completed: {$approved} approved, {$rejected} rejected, {$skipped} skipped.";
         $this->insertNotification($adminId, $title, $message, 'admin_bulk_complete', null);
     }
@@ -82,11 +82,24 @@ class NotificationService {
 
     private function insertNotification(int $userId, string $title, string $message, string $type, ?int $refId): void {
         try {
+            if (class_exists('PushNotificationService')) {
+                $nid = PushNotificationService::notifyUser($userId, $title, $message, $type, $refId);
+                if ($nid !== null) {
+                    try {
+                        $this->db->prepare("UPDATE notifications SET reference_id = COALESCE(reference_id, ?), seen_by_agent = 0 WHERE id = ?")
+                                 ->execute([$refId, $nid]);
+                    } catch (Throwable $e) {}
+                    return;
+                }
+            }
             $stmt = $this->db->prepare("
                 INSERT INTO notifications (user_id, title, message, type, reference_id, seen_by_agent)
                 VALUES (?, ?, ?, ?, ?, 0)
             ");
             $stmt->execute([$userId, $title, $message, $type, $refId]);
+            if (class_exists('PushNotificationService')) {
+                PushNotificationService::kickAfterResponse();
+            }
         } catch (PDOException $e) {
             error_log("NotificationService insert error: " . $e->getMessage());
         }

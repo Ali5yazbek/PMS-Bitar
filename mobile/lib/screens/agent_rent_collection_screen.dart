@@ -75,6 +75,15 @@ double _toDouble(dynamic val) {
   return double.tryParse(val.toString()) ?? 0.0;
 }
 
+String _formatCfa(dynamic val) {
+  final d = _toDouble(val);
+  final parts = d.toStringAsFixed(0);
+  return parts.replaceAllMapped(
+    RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+    (m) => '${m[1]},',
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 class AgentRentCollectionScreen extends ConsumerStatefulWidget {
@@ -1087,12 +1096,23 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
   final _notesController = TextEditingController();
   String _paymentMethod = 'Cash';
   bool _isLoading = false;
+  late bool _isDollar;
+  late double _exchangeRate;
 
   @override
   void initState() {
     super.initState();
-    final rem = _toDouble(widget.details['remaining']);
-    _amountController.text = rem > 0 ? rem.toStringAsFixed(0) : '';
+    final cState = ref.read(currencyProvider);
+    _isDollar = cState.currency == 'USD';
+    _exchangeRate = cState.exchangeRate > 0 ? cState.exchangeRate : 600.0;
+
+    final remCfa = _toDouble(widget.details['remaining']);
+    if (_isDollar) {
+      final remUsd = remCfa / _exchangeRate;
+      _amountController.text = remUsd > 0 ? remUsd.toStringAsFixed(2) : '';
+    } else {
+      _amountController.text = remCfa > 0 ? remCfa.toStringAsFixed(0) : '';
+    }
   }
 
   @override
@@ -1102,17 +1122,68 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
     super.dispose();
   }
 
+  void _switchCurrency(bool toDollar) {
+    if (_isDollar == toDollar) return;
+    final text = _amountController.text.trim();
+    final currentVal = double.tryParse(text);
+
+    setState(() {
+      _isDollar = toDollar;
+      if (currentVal != null && currentVal > 0) {
+        if (toDollar) {
+          // Converted from CFA to Dollar
+          _amountController.text = (currentVal / _exchangeRate).toStringAsFixed(2);
+        } else {
+          // Converted from Dollar to CFA
+          _amountController.text = (currentVal * _exchangeRate).toStringAsFixed(0);
+        }
+      } else {
+        final remCfa = _toDouble(widget.details['remaining']);
+        if (toDollar) {
+          final remUsd = remCfa / _exchangeRate;
+          _amountController.text = remUsd > 0 ? remUsd.toStringAsFixed(2) : '';
+        } else {
+          _amountController.text = remCfa > 0 ? remCfa.toStringAsFixed(0) : '';
+        }
+      }
+    });
+
+    // Mirror to global provider
+    if (ref.read(currencyProvider).currency != (toDollar ? 'USD' : 'CFA')) {
+      ref.read(currencyProvider.notifier).toggleCurrency();
+    }
+  }
+
   Future<void> _submitPayment() async {
     setState(() => _isLoading = true);
     try {
-      final amount = double.tryParse(_amountController.text.trim());
-      if (amount == null || amount <= 0) throw Exception('Please enter a valid amount');
+      final enteredVal = double.tryParse(_amountController.text.trim());
+      if (enteredVal == null || enteredVal <= 0) {
+        throw Exception('Please enter a valid amount');
+      }
+
+      // Calculate equivalent CFA amount for backend deduction
+      final double amountInCfa;
+      final String currencyNote;
+      if (_isDollar) {
+        amountInCfa = enteredVal * _exchangeRate;
+        currencyNote = '[Paid \$${enteredVal.toStringAsFixed(2)} USD @ ${_exchangeRate.toStringAsFixed(0)} CFA/USD]';
+      } else {
+        amountInCfa = enteredVal;
+        currencyNote = '[Paid CFA ${_formatCfa(enteredVal)}]';
+      }
+
+      final userNotes = _notesController.text.trim();
+      final combinedNotes = userNotes.isNotEmpty ? '$currencyNote $userNotes' : currencyNote;
 
       await AgentApi.instance.collectRent({
         'invoice_id': widget.details['invoice_id'],
-        'amount': amount,
+        'amount': amountInCfa,
+        'paid_currency': _isDollar ? 'USD' : 'CFA',
+        'paid_amount': enteredVal,
+        'exchange_rate': _exchangeRate,
         'method': _paymentMethod,
-        'notes': _notesController.text,
+        'notes': combinedNotes,
         'type': widget.details['type'] ?? 'rent',
       });
 
@@ -1122,19 +1193,27 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
         final List<dynamic> elecHistory = cacheStr != null ? jsonDecode(cacheStr) : [];
         elecHistory.add({
           'date': DateTime.now().toIso8601String(),
-          'amount': amount,
+          'amount': amountInCfa,
+          'paid_currency': _isDollar ? 'USD' : 'CFA',
+          'paid_amount': enteredVal,
           'tenant_name': widget.details['tenant_name'],
           'building_name': widget.details['building_name'],
           'apartment_number': widget.details['apartment_code'] ?? widget.details['apartment_number'] ?? '',
-          'type': 'electricity'
+          'type': 'electricity',
         });
         await prefs.setString('local_elec_history', jsonEncode(elecHistory));
       }
 
       if (mounted) {
         Navigator.pop(context);
+        final paidDisplay = _isDollar
+            ? '\$${enteredVal.toStringAsFixed(2)} USD'
+            : 'CFA ${_formatCfa(enteredVal)}';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Payment collected successfully ✓', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green),
+          SnackBar(
+            content: Text('Payment of $paidDisplay collected successfully ✓', style: const TextStyle(color: Colors.white)),
+            backgroundColor: Colors.green,
+          ),
         );
         widget.onRefresh();
       }
@@ -1149,11 +1228,36 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
     }
   }
 
+  Widget _buildCurrencyTab(String label, bool isSelected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? (label.contains('USD') ? const Color(0xFF00D4AA) : AppTheme.primary)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? const Color(0xFF04130F) : Colors.blueGrey,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = widget.details;
     final formatAmount = ref.watch(formatAmountProvider);
-    final remaining = _toDouble(d['remaining']);
+    final remainingCfa = _toDouble(d['remaining']);
+    final enteredVal = double.tryParse(_amountController.text.trim()) ?? 0.0;
 
     return Container(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom + 20, left: 20, right: 20, top: 20),
@@ -1175,7 +1279,7 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
             ),
             const SizedBox(height: 12),
 
-            // Invoice Info
+            // Invoice Info Card
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(color: const Color(0xFF0D1620), borderRadius: BorderRadius.circular(14)),
@@ -1192,7 +1296,29 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
                           Text('Apt ${d['apartment_code']} • ${d['building_name']}', style: GoogleFonts.inter(color: AppTheme.textSecondary, fontSize: 12)),
                         ],
                       ),
-                      Text(formatAmount(remaining), style: GoogleFonts.outfit(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            formatAmount(remainingCfa),
+                            style: GoogleFonts.outfit(
+                              color: const Color(0xFF00D4AA),
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            _isDollar
+                                ? 'CFA ${_formatCfa(remainingCfa)}'
+                                : '\$${(remainingCfa / _exchangeRate).toStringAsFixed(2)} USD',
+                            style: GoogleFonts.inter(
+                              color: Colors.blueGrey.shade400,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                   if (d['invoice_number'] != null && d['invoice_number'].toString().isNotEmpty) ...[
@@ -1204,19 +1330,112 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
             ),
             const SizedBox(height: 16),
 
-            // Amount input
-            Text('Amount Received', style: GoogleFonts.inter(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
+            // Amount Header + Currency Switcher
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      _isDollar ? 'Amount Received in Dollar' : 'Amount Received in CFA',
+                      style: GoogleFonts.inter(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                      decoration: BoxDecoration(
+                        color: _isDollar ? Colors.green.withValues(alpha: 0.15) : AppTheme.primary.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: _isDollar ? const Color(0xFF00D4AA).withValues(alpha: 0.4) : AppTheme.primary.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Text(
+                        _isDollar ? 'USD \$' : 'CFA',
+                        style: TextStyle(
+                          color: _isDollar ? const Color(0xFF00D4AA) : AppTheme.primary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                // Interactive Currency Toggle: CFA <-> USD
+                Container(
+                  padding: const EdgeInsets.all(2.5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0D1620),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF1D3347)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildCurrencyTab('CFA', !_isDollar, () => _switchCurrency(false)),
+                      const SizedBox(width: 2),
+                      _buildCurrencyTab('USD \$', _isDollar, () => _switchCurrency(true)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            // Amount Input TextField
             TextField(
               controller: _amountController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
               decoration: InputDecoration(
-                hintText: '0',
+                prefixIcon: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Text(
+                    _isDollar ? '\$' : 'CFA',
+                    style: TextStyle(
+                      color: _isDollar ? const Color(0xFF00D4AA) : AppTheme.accent,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+                hintText: _isDollar ? '0.00' : '0',
                 hintStyle: const TextStyle(color: Colors.blueGrey),
                 filled: true,
                 fillColor: const Color(0xFF0D1620),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF1D3347))),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(
+                    color: _isDollar ? const Color(0xFF00D4AA).withValues(alpha: 0.45) : const Color(0xFF1D3347),
+                    width: _isDollar ? 1.2 : 1.0,
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: _isDollar ? const Color(0xFF00D4AA) : AppTheme.primary, width: 1.5),
+                ),
+              ),
+            ),
+
+            // Live Equivalent Conversion Display
+            Padding(
+              padding: const EdgeInsets.only(top: 6, left: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.currency_exchange_rounded, size: 12, color: _isDollar ? const Color(0xFF00D4AA) : AppTheme.accent),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      _isDollar
+                          ? 'Equivalent: CFA ${_formatCfa(enteredVal * _exchangeRate)} (Rate: 1 USD = ${_exchangeRate.toStringAsFixed(0)} CFA)'
+                          : 'Equivalent: \$${(enteredVal / _exchangeRate).toStringAsFixed(2)} USD (Rate: 1 USD = ${_exchangeRate.toStringAsFixed(0)} CFA)',
+                      style: GoogleFonts.inter(color: Colors.blueGrey.shade300, fontSize: 11, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
@@ -1269,7 +1488,12 @@ class _ReviewAndPayModalState extends ConsumerState<_ReviewAndPayModal> {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: const EdgeInsets.symmetric(vertical: 14)),
                   onPressed: _submitPayment,
-                  child: const Text('Confirm Payment', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                  child: Text(
+                    _isDollar
+                        ? 'Confirm Payment (\$${enteredVal.toStringAsFixed(2)} USD)'
+                        : 'Confirm Payment (CFA ${_formatCfa(enteredVal)})',
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
                 ),
               ),
           ],

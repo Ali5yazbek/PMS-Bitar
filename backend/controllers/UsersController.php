@@ -29,6 +29,19 @@ class UsersController {
 
     public function index() {
         $this->requireAdmin();
+
+        try {
+            $check = $this->db->query("SELECT COUNT(*) FROM users WHERE role = '' OR role IS NULL")->fetchColumn();
+            if ($check > 0) {
+                $this->db->exec("ALTER TABLE users MODIFY COLUMN role VARCHAR(50) NOT NULL DEFAULT 'tenant'");
+                $this->db->exec("UPDATE users SET role = 'agent' WHERE id = 5 OR username = 'hassan' OR email LIKE '%hassan%'");
+                $this->db->exec("UPDATE users SET role = 'maintenance' WHERE id IN (2, 6) OR username IN ('milad', 'mohamad')");
+                $this->db->exec("UPDATE users SET role = 'cashier' WHERE id = 3 OR username = 'dwdw'");
+                $this->db->exec("UPDATE users SET role = 'admin' WHERE id = 1 OR username = 'admin'");
+                $this->db->exec("UPDATE users SET role = 'tenant' WHERE role = '' OR role IS NULL");
+            }
+        } catch (Throwable $e) {}
+
         
         $stmt = $this->db->query("SELECT id, name, username, email, role, phone, national_id, created_at FROM users ORDER BY created_at DESC");
         echo json_encode($stmt->fetchAll());

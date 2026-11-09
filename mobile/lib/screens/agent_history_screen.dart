@@ -47,14 +47,19 @@ class _AgentHistoryScreenState extends ConsumerState<AgentHistoryScreen> with Si
         children: [
           // 4 Categorized Tabs: Generator, Apartment, Daily Reports, Apartment Costs
           Container(
-            color: const Color(0xFF0D1620),
+            decoration: const BoxDecoration(
+              color: AppTheme.surface,
+              border: Border(bottom: BorderSide(color: AppTheme.border)),
+            ),
             child: TabBar(
               controller: _tabController,
               isScrollable: true,
-              indicatorColor: Color(0xFF1FE0B8),
-              labelColor: Colors.white,
-              unselectedLabelColor: Colors.blueGrey.shade400,
-              labelStyle: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 12),
+              tabAlignment: TabAlignment.start,
+              indicatorColor: AppTheme.primary,
+              dividerColor: Colors.transparent,
+              labelColor: AppTheme.textPrimary,
+              unselectedLabelColor: AppTheme.textMuted,
+              labelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 12.5),
               tabs: const [
                 Tab(text: 'Generator Readings'),
                 Tab(text: 'Apartment Readings'),

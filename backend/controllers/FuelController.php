@@ -4,6 +4,42 @@ class FuelController {
 
     public function __construct() {
         $this->db = Database::getInstance()->getConnection();
+        $this->ensureFuelSchema();
+    }
+
+    private function ensureFuelSchema() {
+        try {
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS fuel_suppliers (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    contact_person VARCHAR(255) NULL,
+                    phone VARCHAR(100) NULL,
+                    email VARCHAR(255) NULL,
+                    address TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ");
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS fuel_movements (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    generator_id INT NOT NULL,
+                    type VARCHAR(50) NOT NULL DEFAULT 'Refill',
+                    amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+                    cost_per_liter DECIMAL(12,2) NULL DEFAULT 0,
+                    supplier_id INT NULL,
+                    user_id INT NULL,
+                    date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    receipt_path VARCHAR(500) NULL,
+                    notes TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_gen_date (generator_id, date),
+                    INDEX idx_type (type)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ");
+        } catch (\Throwable $e) {
+            // Ignore schema heal errors if user lacks DDL privileges
+        }
     }
 
     public function getMovements($generator_id = null) {
@@ -158,43 +194,81 @@ class FuelController {
             $today = date('Y-m-d');
 
             $stmt = $this->db->query("
-                SELECT g.id, g.name, g.capacity_kva, g.fuel_capacity, g.current_fuel,
-                       g.status, g.min_fuel_level_alert, g.expected_fuel_consumption_per_hour,
-                       b.name as building_name, b.id as building_id
+                SELECT g.*,
+                       COALESCE(b.name, 'Unassigned') as building_name, b.id as building_id
                 FROM generators g
-                JOIN buildings b ON g.building_id = b.id
-                ORDER BY b.name ASC
+                LEFT JOIN buildings b ON g.building_id = b.id
+                ORDER BY b.name ASC, g.name ASC
             ");
             $generators = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $todayStmt = $this->db->query("
-                SELECT r.generator_id,
-                       COALESCE(SUM(COALESCE(r.admin_actual_fuel, r.ml_predicted_fuel_burn)), 0) as consumed_today,
-                       COALESCE(SUM(r.calculated_hours_worked), 0) as hours_today
-                FROM generator_logs r
-                WHERE r.log_date = '{$today}'
-                GROUP BY r.generator_id
-            ");
             $todayData = [];
-            while ($row = $todayStmt->fetch(PDO::FETCH_ASSOC)) {
-                $todayData[$row['generator_id']] = $row;
+            try {
+                $todayStmt = $this->db->prepare("
+                    SELECT r.generator_id,
+                           COALESCE(SUM(COALESCE(r.actual_fuel_spent, r.ml_predicted_fuel_burn, r.expected_factory_fuel_burn, r.admin_actual_fuel)), 0) as consumed_today,
+                           COALESCE(SUM(r.calculated_hours_worked), 0) as hours_today
+                    FROM daily_logs r
+                    WHERE r.date = ?
+                    GROUP BY r.generator_id
+                ");
+                $todayStmt->execute([$today]);
+                while ($row = $todayStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $todayData[$row['generator_id']] = $row;
+                }
+            } catch (\Throwable $e) {
+                // Fallback if daily_logs has older columns
+                try {
+                    $todayStmt = $this->db->prepare("
+                        SELECT r.generator_id,
+                               COALESCE(SUM(COALESCE(r.admin_actual_fuel, r.ml_predicted_fuel_burn)), 0) as consumed_today,
+                               COALESCE(SUM(r.calculated_hours_worked), 0) as hours_today
+                        FROM daily_logs r
+                        WHERE r.date = ?
+                        GROUP BY r.generator_id
+                    ");
+                    $todayStmt->execute([$today]);
+                    while ($row = $todayStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $todayData[$row['generator_id']] = $row;
+                    }
+                } catch (\Throwable $e2) {}
             }
 
-            $avgStmt = $this->db->query("
-                SELECT generator_id, AVG(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)) as avg_daily_fuel
-                FROM generator_logs
-                WHERE COALESCE(admin_actual_fuel, ml_predicted_fuel_burn) > 0 AND log_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-                GROUP BY generator_id
-            ");
             $avgData = [];
-            while ($row = $avgStmt->fetch(PDO::FETCH_ASSOC)) {
-                $avgData[$row['generator_id']] = floatval($row['avg_daily_fuel']);
+            try {
+                $avgStmt = $this->db->query("
+                    SELECT generator_id,
+                           AVG(COALESCE(actual_fuel_spent, ml_predicted_fuel_burn, expected_factory_fuel_burn, admin_actual_fuel)) as avg_daily_fuel
+                    FROM daily_logs
+                    WHERE COALESCE(actual_fuel_spent, ml_predicted_fuel_burn, expected_factory_fuel_burn, admin_actual_fuel) > 0
+                      AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    GROUP BY generator_id
+                ");
+                while ($row = $avgStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $avgData[$row['generator_id']] = floatval($row['avg_daily_fuel']);
+                }
+            } catch (\Throwable $e) {
+                try {
+                    $avgStmt = $this->db->query("
+                        SELECT generator_id, AVG(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)) as avg_daily_fuel
+                        FROM daily_logs
+                        WHERE COALESCE(admin_actual_fuel, ml_predicted_fuel_burn) > 0
+                          AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                        GROUP BY generator_id
+                    ");
+                    while ($row = $avgStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $avgData[$row['generator_id']] = floatval($row['avg_daily_fuel']);
+                    }
+                } catch (\Throwable $e2) {}
             }
 
-            $transferTotal = $this->db->query("
-                SELECT COALESCE(SUM(amount), 0) as total 
-                FROM fuel_movements WHERE type = 'Transfer_Out'
-            ")->fetchColumn();
+            $transferTotal = 0;
+            try {
+                $transferTotal = $this->db->query("
+                    SELECT COALESCE(SUM(amount), 0) as total 
+                    FROM fuel_movements WHERE type = 'Transfer_Out'
+                ")->fetchColumn();
+            } catch (\Throwable $e) {}
 
             $buildings = [];
             $totalCapacity = 0;
@@ -207,8 +281,8 @@ class FuelController {
 
             foreach ($generators as $g) {
                 $id = $g['id'];
-                $tankCap = floatval($g['fuel_capacity']);
-                $currentFuel = floatval($g['current_fuel']);
+                $tankCap = floatval($g['fuel_capacity'] ?? 0);
+                $currentFuel = floatval($g['current_fuel'] ?? 0);
                 $freeCap = $tankCap - $currentFuel;
                 $fuelPct = $tankCap > 0 ? round(($currentFuel / $tankCap) * 100, 1) : 0;
                 $avgDaily = $avgData[$id] ?? (floatval($g['expected_fuel_consumption_per_hour'] ?? 0) * 8);
@@ -248,9 +322,9 @@ class FuelController {
                 $buildings[] = [
                     'id' => $id,
                     'name' => $g['name'],
-                    'building_name' => $g['building_name'],
-                    'building_id' => $g['building_id'],
-                    'capacity_kva' => floatval($g['capacity_kva']),
+                    'building_name' => $g['building_name'] ?? 'Unassigned',
+                    'building_id' => $g['building_id'] ?? null,
+                    'capacity_kva' => floatval($g['capacity_kva'] ?? 0),
                     'tank_capacity' => $tankCap,
                     'current_fuel' => round($currentFuel, 1),
                     'free_capacity' => round($freeCap, 1),
@@ -278,7 +352,7 @@ class FuelController {
                 'alerts' => $alerts,
             ]);
 
-        } catch (PDOException $e) {
+        } catch (\Throwable $e) {
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -289,36 +363,42 @@ class FuelController {
             $today = date('Y-m-d');
 
             $stmt = $this->db->query("
-                SELECT g.id, g.name, g.fuel_capacity, g.current_fuel,
-                       g.expected_fuel_consumption_per_hour,
-                       b.name as building_name
+                SELECT g.*,
+                       COALESCE(b.name, 'Unassigned') as building_name
                 FROM generators g
-                JOIN buildings b ON g.building_id = b.id
-                ORDER BY b.name ASC
+                LEFT JOIN buildings b ON g.building_id = b.id
+                ORDER BY b.name ASC, g.name ASC
             ");
             $generators = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $avgStmt = $this->db->query("
-                SELECT generator_id, AVG(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)) as avg_daily_fuel
-                FROM generator_logs
-                WHERE COALESCE(admin_actual_fuel, ml_predicted_fuel_burn) > 0 AND log_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-                GROUP BY generator_id
-            ");
             $avgData = [];
-            while ($row = $avgStmt->fetch(PDO::FETCH_ASSOC)) {
-                $avgData[$row['generator_id']] = floatval($row['avg_daily_fuel']);
-            }
+            try {
+                $avgStmt = $this->db->query("
+                    SELECT generator_id,
+                           AVG(COALESCE(actual_fuel_spent, ml_predicted_fuel_burn, expected_factory_fuel_burn, admin_actual_fuel)) as avg_daily_fuel
+                    FROM daily_logs
+                    WHERE COALESCE(actual_fuel_spent, ml_predicted_fuel_burn, expected_factory_fuel_burn, admin_actual_fuel) > 0
+                      AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    GROUP BY generator_id
+                ");
+                while ($row = $avgStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $avgData[$row['generator_id']] = floatval($row['avg_daily_fuel']);
+                }
+            } catch (\Throwable $e) {}
 
-            $todayStmt = $this->db->query("
-                SELECT generator_id,
-                       COALESCE(SUM(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)), 0) as consumed_today,
-                       COALESCE(SUM(calculated_hours_worked), 0) as hours_today
-                FROM generator_logs WHERE log_date = '{$today}' GROUP BY generator_id
-            ");
             $todayData = [];
-            while ($row = $todayStmt->fetch(PDO::FETCH_ASSOC)) {
-                $todayData[$row['generator_id']] = $row;
-            }
+            try {
+                $todayStmt = $this->db->prepare("
+                    SELECT generator_id,
+                           COALESCE(SUM(COALESCE(actual_fuel_spent, ml_predicted_fuel_burn, expected_factory_fuel_burn, admin_actual_fuel)), 0) as consumed_today,
+                           COALESCE(SUM(calculated_hours_worked), 0) as hours_today
+                    FROM daily_logs WHERE date = ? GROUP BY generator_id
+                ");
+                $todayStmt->execute([$today]);
+                while ($row = $todayStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $todayData[$row['generator_id']] = $row;
+                }
+            } catch (\Throwable $e) {}
 
             $totalFuel = 0;
             $totalCapacity = 0;
@@ -331,8 +411,8 @@ class FuelController {
 
             foreach ($generators as $g) {
                 $id = $g['id'];
-                $tankCap = floatval($g['fuel_capacity']);
-                $currentFuel = floatval($g['current_fuel']);
+                $tankCap = floatval($g['fuel_capacity'] ?? 0);
+                $currentFuel = floatval($g['current_fuel'] ?? 0);
                 $fuelPct = $tankCap > 0 ? ($currentFuel / $tankCap) * 100 : 0;
                 $avgDaily = $avgData[$id] ?? (floatval($g['expected_fuel_consumption_per_hour'] ?? 0) * 8);
                 $todayConsumed = floatval($todayData[$id]['consumed_today'] ?? 0);
@@ -401,7 +481,7 @@ class FuelController {
                 'forecast' => $forecastItems,
             ]);
 
-        } catch (PDOException $e) {
+        } catch (\Throwable $e) {
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -500,71 +580,97 @@ class FuelController {
         try {
             $stmt = $this->db->query("
                 SELECT m.id, m.date, m.amount, m.notes, m.type, m.created_at,
-                       g.name as generator_name, b.name as building_name,
+                       COALESCE(g.name, 'Unknown Generator') as generator_name,
+                       COALESCE(b.name, 'Unassigned') as building_name,
                        u.name as user_name
                 FROM fuel_movements m
-                JOIN generators g ON m.generator_id = g.id
-                JOIN buildings b ON g.building_id = b.id
+                LEFT JOIN generators g ON m.generator_id = g.id
+                LEFT JOIN buildings b ON g.building_id = b.id
                 LEFT JOIN users u ON m.user_id = u.id
                 WHERE m.type IN ('Transfer_In', 'Transfer_Out')
                 ORDER BY m.date DESC, m.created_at DESC
                 LIMIT 200
             ");
             echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['error' => $e->getMessage()]);
+        } catch (\Throwable $e) {
+            echo json_encode([]);
         }
     }
 
     public function getFuelForecast() {
         try {
             $stmt = $this->db->query("
-                SELECT g.id, g.name, g.fuel_capacity, g.current_fuel,
-                       g.expected_fuel_consumption_per_hour,
-                       b.name as building_name,
-                       AVG(COALESCE(r.admin_actual_fuel, r.ml_predicted_fuel_burn)) as avg_daily_fuel,
-                       COUNT(r.id) as report_count
+                SELECT g.*,
+                       COALESCE(b.name, 'Unassigned') as building_name
                 FROM generators g
-                JOIN buildings b ON g.building_id = b.id
-                LEFT JOIN generator_logs r 
-                    ON r.generator_id = g.id 
-                    AND COALESCE(r.admin_actual_fuel, r.ml_predicted_fuel_burn) > 0 
-                    AND r.log_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-                GROUP BY g.id, g.name, g.fuel_capacity, g.current_fuel,
-                         g.expected_fuel_consumption_per_hour, b.name
-                ORDER BY b.name ASC
+                LEFT JOIN buildings b ON g.building_id = b.id
+                ORDER BY b.name ASC, g.name ASC
             ");
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            $avgMap = [];
+            $countMap = [];
+            try {
+                $logStmt = $this->db->query("
+                    SELECT generator_id,
+                           AVG(COALESCE(actual_fuel_spent, ml_predicted_fuel_burn, expected_factory_fuel_burn, admin_actual_fuel)) as avg_daily_fuel,
+                           COUNT(id) as report_count
+                    FROM daily_logs
+                    WHERE COALESCE(actual_fuel_spent, ml_predicted_fuel_burn, expected_factory_fuel_burn, admin_actual_fuel) > 0
+                      AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    GROUP BY generator_id
+                ");
+                while ($r = $logStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $avgMap[$r['generator_id']] = floatval($r['avg_daily_fuel'] ?? 0);
+                    $countMap[$r['generator_id']] = intval($r['report_count'] ?? 0);
+                }
+            } catch (\Throwable $e) {
+                try {
+                    $logStmt = $this->db->query("
+                        SELECT generator_id,
+                               AVG(COALESCE(admin_actual_fuel, ml_predicted_fuel_burn)) as avg_daily_fuel,
+                               COUNT(id) as report_count
+                        FROM daily_logs
+                        WHERE COALESCE(admin_actual_fuel, ml_predicted_fuel_burn) > 0
+                          AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                        GROUP BY generator_id
+                    ");
+                    while ($r = $logStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $avgMap[$r['generator_id']] = floatval($r['avg_daily_fuel'] ?? 0);
+                        $countMap[$r['generator_id']] = intval($r['report_count'] ?? 0);
+                    }
+                } catch (\Throwable $e2) {}
+            }
+
             $forecast = [];
             foreach ($rows as $row) {
-                $avgDaily = floatval($row['avg_daily_fuel'] ?? 0);
+                $id = $row['id'];
+                $avgDaily = floatval($avgMap[$id] ?? 0);
                 if ($avgDaily <= 0) {
                     $avgDaily = floatval($row['expected_fuel_consumption_per_hour'] ?? 0) * 8;
                 }
-                $currentFuel = floatval($row['current_fuel']);
+                $currentFuel = floatval($row['current_fuel'] ?? 0);
                 $remainingDays = $avgDaily > 0 ? round($currentFuel / $avgDaily, 1) : null;
                 $depletionDate = ($remainingDays !== null && $remainingDays > 0)
                     ? date('Y-m-d', strtotime('+' . intval($remainingDays) . ' days'))
                     : null;
 
                 $forecast[] = [
-                    'id' => $row['id'],
+                    'id' => $id,
                     'name' => $row['name'],
-                    'building_name' => $row['building_name'],
+                    'building_name' => $row['building_name'] ?? 'Unassigned',
                     'current_fuel' => round($currentFuel, 1),
-                    'tank_capacity' => floatval($row['fuel_capacity']),
+                    'tank_capacity' => floatval($row['fuel_capacity'] ?? 0),
                     'avg_daily_fuel' => round($avgDaily, 2),
                     'remaining_days' => $remainingDays,
                     'depletion_date' => $depletionDate,
                     'monthly_estimate' => round($avgDaily * 30, 0),
-                    'report_count' => intval($row['report_count']),
+                    'report_count' => intval($countMap[$id] ?? 0),
                 ];
             }
 
             echo json_encode($forecast);
-        } catch (PDOException $e) {
+        } catch (\Throwable $e) {
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
         }

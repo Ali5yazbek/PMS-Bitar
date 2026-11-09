@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../config/app_theme.dart';
+import '../providers/auth_provider.dart';
 import '../services/agent_api.dart';
 import '../core/network/request_queue.dart';
 import '../widgets/mobile/enterprise_mobile_scaffold.dart';
@@ -28,7 +29,7 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
   SyncStatusInfo _syncInfo = SyncStatusInfo(
     state: SyncStatusState.synchronized,
     pendingCount: 0,
-    label: '✓ All data synchronized',
+    label: 'All data synchronized',
   );
 
   @override
@@ -61,143 +62,127 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
     super.dispose();
   }
 
+  String _cleanSyncLabel(String raw) {
+    return raw.replaceAll('✓', '').trim();
+  }
+
   @override
   Widget build(BuildContext context) {
     final metricsAsync = ref.watch(agentDashboardProvider);
+    final userName = ref.watch(authProvider).user?.name ?? 'Field Agent';
 
     final Color syncColor = _syncInfo.state == SyncStatusState.offline
         ? AppTheme.danger
-        : (_syncInfo.state == SyncStatusState.uploading ? AppTheme.accent : AppTheme.primary);
+        : (_syncInfo.state == SyncStatusState.uploading ? AppTheme.warning : AppTheme.primary);
 
     return EnterpriseMobileScaffold(
       title: 'Agent Dashboard',
       userRole: 'Agent',
-      userName: 'Field Agent',
+      userName: userName,
       currentTabIndex: 0,
-      unreadNotifications: 2,
+      unreadNotifications: 0,
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(agentDashboardProvider);
+          ref.invalidate(agentSmartTasksStreamProvider);
         },
         color: AppTheme.primary,
         backgroundColor: AppTheme.surface,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Luxury Sync Telemetry Card ──────────────────────────────────
+              // ── Compact Welcome & Sync Status Card ──────────────────────────
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      syncColor.withValues(alpha: 0.14),
-                      AppTheme.surface,
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: syncColor.withValues(alpha: 0.35)),
+                  color: AppTheme.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppTheme.border),
                 ),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: syncColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        _syncInfo.state == SyncStatusState.offline
+                            ? Icons.cloud_off_rounded
+                            : (_syncInfo.state == SyncStatusState.uploading
+                                ? Icons.cloud_upload_rounded
+                                : Icons.cloud_done_outlined),
+                        color: syncColor,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
                     Expanded(
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: syncColor.withValues(alpha: 0.16),
-                              borderRadius: BorderRadius.circular(12),
+                          Text(
+                            userName,
+                            style: GoogleFonts.outfit(
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15.5,
                             ),
-                            child: Icon(
-                              _syncInfo.state == SyncStatusState.offline
-                                  ? Icons.cloud_off_rounded
-                                  : (_syncInfo.state == SyncStatusState.uploading
-                                      ? Icons.cloud_upload_rounded
-                                      : Icons.verified_rounded),
-                              color: syncColor,
-                              size: 20,
-                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _syncInfo.label,
-                                  style: GoogleFonts.outfit(
-                                    color: AppTheme.textPrimary,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 14,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Offline Queue: ${_syncInfo.pendingCount} pending packet(s)',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 11,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
+                          const SizedBox(height: 2),
+                          Text(
+                            _syncInfo.pendingCount > 0
+                                ? '${_cleanSyncLabel(_syncInfo.label)} • ${_syncInfo.pendingCount} pending'
+                                : _cleanSyncLabel(_syncInfo.label),
+                            style: GoogleFonts.inter(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12,
                             ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.sync_rounded, color: AppTheme.primary, size: 22),
+                      tooltip: 'Sync now',
+                      icon: const Icon(Icons.sync_rounded, color: AppTheme.primary, size: 20),
                       onPressed: () {
                         RequestQueue.instance.triggerSync();
                         ref.invalidate(agentDashboardProvider);
+                        ref.invalidate(agentSmartTasksStreamProvider);
                       },
                     ),
                   ],
                 ),
               ),
 
-              const SizedBox(height: 22),
-              Row(
-                children: [
-                  Container(
-                    width: 4,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      gradient: AppTheme.primaryGradient,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Field Operations Pulse',
-                    style: GoogleFonts.outfit(
-                      color: AppTheme.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 20),
+              AppTheme.sectionHeader('Field Operations Overview'),
 
               metricsAsync.when(
                 loading: () => const Center(
                   child: Padding(
                     padding: EdgeInsets.all(28),
-                    child: CircularProgressIndicator(color: AppTheme.primary),
+                    child: CircularProgressIndicator(color: AppTheme.primary, strokeWidth: 2.5),
                   ),
                 ),
-                error: (e, _) => Center(
-                  child: Text('Error loading stats: $e', style: const TextStyle(color: AppTheme.danger)),
+                error: (e, _) => Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Text(
+                    'Unable to load metrics: $e',
+                    style: GoogleFonts.inter(color: AppTheme.danger, fontSize: 12.5),
+                  ),
                 ),
                 data: (metrics) {
                   final genTasksDue = metrics['pendingGenReadings'] ?? 0;
@@ -213,71 +198,91 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
                       Row(
                         children: [
                           Expanded(
-                            child: _MetricCard(
+                            child: _PulseCard(
                               title: 'Generators',
                               value: '$genTasksDue due',
-                              icon: Icons.bolt_rounded,
+                              icon: Icons.power_outlined,
                               color: AppTheme.accent,
+                              onTap: () => context.go('/agent-generators'),
                             ),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: _MetricCard(
+                            child: _PulseCard(
                               title: 'Apartments',
                               value: '$aptTasksDue due',
                               icon: Icons.apartment_rounded,
-                              color: const Color(0xFF38BDF8),
+                              color: AppTheme.info,
+                              onTap: () => context.go('/agent-apartments'),
                             ),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: _MetricCard(
+                            child: _PulseCard(
                               title: 'Subscriptions',
                               value: '$subTasksDue due',
-                              icon: Icons.flash_on_rounded,
+                              icon: Icons.electric_bolt_rounded,
                               color: AppTheme.primary,
+                              onTap: () => context.go('/agent-subscriptions'),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 24),
-                      Row(
-                        children: [
-                          Container(
-                            width: 4,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              gradient: AppTheme.goldGradient,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Smart Priority Dispatch',
-                            style: GoogleFonts.outfit(
-                              color: AppTheme.textPrimary,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
+
+                      const SizedBox(height: 22),
+                      AppTheme.sectionHeader(
+                        'Priority Dispatch',
+                        subtitle: 'Assigned tasks requiring field action',
                       ),
-                      const SizedBox(height: 12),
+
                       Consumer(builder: (context, ref, child) {
                         final smartTasksAsync = ref.watch(agentSmartTasksStreamProvider);
                         return smartTasksAsync.when(
-                          loading: () => const Center(child: CircularProgressIndicator(color: AppTheme.primary)),
-                          error: (e, _) => const Text('Error loading tasks', style: TextStyle(color: AppTheme.danger)),
+                          loading: () => const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(20),
+                              child: CircularProgressIndicator(color: AppTheme.primary, strokeWidth: 2.5),
+                            ),
+                          ),
+                          error: (e, _) => Text(
+                            'Unable to load tasks',
+                            style: GoogleFonts.inter(color: AppTheme.danger, fontSize: 12.5),
+                          ),
                           data: (tasks) {
                             if (tasks.isEmpty) {
                               return Container(
                                 width: double.infinity,
-                                padding: const EdgeInsets.all(20),
-                                decoration: AppTheme.glassCardDecoration(borderRadius: 18),
-                                child: Text(
-                                  'All priority field tasks are completed.',
-                                  style: GoogleFonts.plusJakartaSans(color: AppTheme.textSecondary),
-                                  textAlign: TextAlign.center,
+                                padding: const EdgeInsets.all(18),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.surface,
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: AppTheme.border),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.primary.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Icon(
+                                        Icons.check_circle_outline_rounded,
+                                        color: AppTheme.primary,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        'All priority field tasks are completed.',
+                                        style: GoogleFonts.inter(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               );
                             }
@@ -296,74 +301,68 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
                                 final actionType = taskMap['action_type']?.toString() ?? '';
 
                                 return Container(
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                  decoration: AppTheme.glassCardDecoration(borderRadius: 18),
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.surface,
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(color: AppTheme.border),
+                                  ),
                                   child: Row(
                                     crossAxisAlignment: CrossAxisAlignment.center,
                                     children: [
                                       Container(
-                                        padding: const EdgeInsets.all(10),
+                                        padding: const EdgeInsets.all(9),
                                         decoration: BoxDecoration(
-                                          color: AppTheme.primary.withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(14),
-                                          border: Border.all(
-                                            color: AppTheme.primary.withValues(alpha: 0.35),
-                                          ),
+                                          color: AppTheme.primary.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(10),
                                         ),
-                                        child: const Icon(Icons.task_alt_rounded, color: AppTheme.primary, size: 22),
+                                        child: const Icon(
+                                          Icons.task_alt_rounded,
+                                          color: AppTheme.primary,
+                                          size: 20,
+                                        ),
                                       ),
                                       const SizedBox(width: 12),
                                       Expanded(
                                         child: Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Directionality(
-                                              textDirection: TextDirection.ltr,
-                                              child: Row(
-                                                children: [
-                                                  if (tag.isNotEmpty) ...[
-                                                    Container(
-                                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                                      decoration: BoxDecoration(
-                                                        color: AppTheme.accent.withValues(alpha: 0.16),
-                                                        borderRadius: BorderRadius.circular(6),
-                                                        border: Border.all(
-                                                          color: AppTheme.accent.withValues(alpha: 0.35),
-                                                        ),
-                                                      ),
-                                                      child: Text(
-                                                        tag,
-                                                        style: GoogleFonts.plusJakartaSans(
-                                                          color: AppTheme.accent,
-                                                          fontSize: 9,
-                                                          fontWeight: FontWeight.w800,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 6),
-                                                  ],
-                                                ],
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Directionality(
-                                              textDirection: TextDirection.ltr,
-                                              child: Text(
-                                                title,
-                                                style: GoogleFonts.outfit(
-                                                  color: AppTheme.textPrimary,
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 14.5,
+                                            if (tag.isNotEmpty) ...[
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                  horizontal: 6,
+                                                  vertical: 2,
                                                 ),
-                                                overflow: TextOverflow.ellipsis,
-                                                maxLines: 2,
+                                                decoration: BoxDecoration(
+                                                  color: AppTheme.accent.withValues(alpha: 0.12),
+                                                  borderRadius: BorderRadius.circular(5),
+                                                ),
+                                                child: Text(
+                                                  tag,
+                                                  style: GoogleFonts.inter(
+                                                    color: AppTheme.accent,
+                                                    fontSize: 9.5,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
                                               ),
+                                              const SizedBox(height: 4),
+                                            ],
+                                            Text(
+                                              title,
+                                              style: GoogleFonts.outfit(
+                                                color: AppTheme.textPrimary,
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 14,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
                                             ),
-                                            const SizedBox(height: 3),
+                                            const SizedBox(height: 2),
                                             Text(
                                               desc,
-                                              style: GoogleFonts.plusJakartaSans(
+                                              style: GoogleFonts.inter(
                                                 color: AppTheme.textSecondary,
                                                 fontSize: 12,
                                               ),
@@ -378,8 +377,14 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: AppTheme.primary,
                                           foregroundColor: const Color(0xFF04130F),
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+                                          elevation: 0,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 9,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
                                         ),
                                         onPressed: () {
                                           if (actionType == 'GENERATOR_LOG') {
@@ -403,9 +408,9 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
                                         },
                                         child: Text(
                                           actionText.length > 12 ? 'Open' : actionText,
-                                          style: GoogleFonts.outfit(
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w800,
+                                          style: GoogleFonts.inter(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
                                           ),
                                         ),
                                       ),
@@ -418,86 +423,73 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
                         );
                       }),
 
-                      const SizedBox(height: 24),
-                      Text(
-                        'Operational Telemetry',
-                        style: GoogleFonts.outfit(
-                          color: AppTheme.textPrimary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      GridView.count(
-                        crossAxisCount: 2,
+                      const SizedBox(height: 22),
+                      AppTheme.sectionHeader('Operational Telemetry'),
+
+                      GridView(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                        childAspectRatio: 1.5,
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                          mainAxisExtent: 86,
+                        ),
                         children: [
                           _MetricCard(
                             title: 'Sub Tasks Due',
                             value: '$subTasksDue',
-                            icon: Icons.payments_rounded,
+                            icon: Icons.payments_outlined,
                             color: AppTheme.primary,
                           ),
                           _MetricCard(
                             title: 'Gen Tasks Due',
                             value: '$genTasksDue',
-                            icon: Icons.power_rounded,
+                            icon: Icons.power_outlined,
                             color: AppTheme.accent,
                           ),
                           _MetricCard(
                             title: 'Apt Tasks Due',
                             value: '$aptTasksDue',
-                            icon: Icons.home_work_rounded,
-                            color: const Color(0xFFA78BFA),
+                            icon: Icons.home_work_outlined,
+                            color: AppTheme.secondary,
                           ),
                           _MetricCard(
                             title: 'Daily Report',
                             value: isReportSubmitted ? 'Submitted' : 'Pending',
-                            icon: Icons.assignment_turned_in_rounded,
+                            icon: Icons.assignment_turned_in_outlined,
                             color: isReportSubmitted ? AppTheme.primary : AppTheme.danger,
                           ),
                         ],
                       ),
 
-                      const SizedBox(height: 24),
-                      Text(
-                        "Today's Assigned Workflow",
-                        style: GoogleFonts.outfit(
-                          color: AppTheme.textPrimary,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 22),
+                      AppTheme.sectionHeader("Today's Workflow Checklist"),
 
                       _WorkflowTaskItem(
-                        title: 'Rent Collection',
-                        subtitle: 'Collect rent for assigned tenants',
+                        title: 'Rent & Utility Collection',
+                        subtitle: 'Collect due invoices for assigned tenants',
                         status: subTasksDue == 0 ? 'Completed' : '$subTasksDue Pending',
                         isDone: subTasksDue == 0,
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       _WorkflowTaskItem(
                         title: 'Generator Morning Reading',
-                        subtitle: 'Galaxy Building • CAT 350kVA',
+                        subtitle: 'Record meter hours and fuel levels',
                         status: genTasksDue == 0 ? 'Completed' : '$genTasksDue Pending',
                         isDone: genTasksDue == 0,
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       _WorkflowTaskItem(
-                        title: 'Apartment Electricity Verification',
-                        subtitle: 'Galaxy & Bitar Towers • Apartments',
-                        status: '$aptTasksDue Pending',
+                        title: 'Apartment Electricity Readings',
+                        subtitle: 'Capture monthly unit meter readings',
+                        status: aptTasksDue == 0 ? 'Completed' : '$aptTasksDue Pending',
                         isDone: aptTasksDue == 0,
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       _WorkflowTaskItem(
                         title: 'Daily Field Summary Report',
-                        subtitle: 'Location visits & evidence photo submission',
+                        subtitle: 'Submit daily site inspection report',
                         status: isReportSubmitted ? 'Submitted' : 'Action Required',
                         isDone: isReportSubmitted,
                       ),
@@ -507,6 +499,75 @@ class _AgentDashboardScreenState extends ConsumerState<AgentDashboardScreen> wit
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PulseCard extends StatelessWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _PulseCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              alignment: Alignment.center,
+              child: Icon(icon, size: 15, color: color),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              value,
+              style: GoogleFonts.outfit(
+                color: AppTheme.textPrimary,
+                fontSize: 15.5,
+                fontWeight: FontWeight.w700,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              title,
+              style: GoogleFonts.inter(
+                color: AppTheme.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ),
       ),
     );
@@ -529,18 +590,11 @@ class _MetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
       decoration: BoxDecoration(
-        gradient: AppTheme.obsidianCardGradient,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: color.withValues(alpha: 0.28)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 5),
-          ),
-        ],
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -549,34 +603,36 @@ class _MetricCard extends StatelessWidget {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(6),
+                width: 26,
+                height: 26,
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(9),
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(7),
                 ),
-                child: Icon(icon, size: 16, color: color),
+                alignment: Alignment.center,
+                child: Icon(icon, size: 14, color: color),
               ),
-              const SizedBox(width: 7),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   title,
-                  style: GoogleFonts.plusJakartaSans(
+                  style: GoogleFonts.inter(
                     color: AppTheme.textSecondary,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w500,
                   ),
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
           Text(
             value,
             style: GoogleFonts.outfit(
               color: AppTheme.textPrimary,
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
+              fontSize: 16.5,
+              fontWeight: FontWeight.w700,
             ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -602,21 +658,25 @@ class _WorkflowTaskItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = isDone ? AppTheme.primary : AppTheme.accent;
+    final accent = isDone ? AppTheme.primary : AppTheme.warning;
 
     return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: AppTheme.glassCardDecoration(borderRadius: 18),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.14),
-              shape: BoxShape.circle,
+              color: accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(9),
             ),
             child: Icon(
-              isDone ? Icons.check_circle_rounded : Icons.schedule_rounded,
+              isDone ? Icons.check_circle_outline_rounded : Icons.schedule_rounded,
               color: accent,
               size: 18,
             ),
@@ -630,14 +690,14 @@ class _WorkflowTaskItem extends StatelessWidget {
                   title,
                   style: GoogleFonts.outfit(
                     color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13.5,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: GoogleFonts.plusJakartaSans(
+                  style: GoogleFonts.inter(
                     color: AppTheme.textMuted,
                     fontSize: 11.5,
                   ),
@@ -645,19 +705,20 @@ class _WorkflowTaskItem extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
             decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: accent.withValues(alpha: 0.35)),
+              color: accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: accent.withValues(alpha: 0.28)),
             ),
             child: Text(
               status,
-              style: GoogleFonts.plusJakartaSans(
+              style: GoogleFonts.inter(
                 color: accent,
                 fontSize: 10.5,
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),

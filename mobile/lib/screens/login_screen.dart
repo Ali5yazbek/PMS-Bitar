@@ -1,11 +1,11 @@
-// ─── Luxury Obsidian & Royal Teal/Gold Login Screen ──────────────────────────
-import 'dart:ui';
+// ─── Enterprise Sign-In Screen ───────────────────────────────────────────────
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../providers/auth_provider.dart';
 import '../config/app_theme.dart';
+import '../router/app_router.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -29,10 +29,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
     final success = await ref
         .read(authProvider.notifier)
         .login(_loginCtrl.text.trim(), _passwordCtrl.text);
-    if (success && mounted) context.go('/');
+    if (success && mounted) {
+      final user = ref.read(authProvider).user;
+      final target = getDefaultRouteForRole(user?.role);
+      context.go(target);
+    }
   }
 
   @override
@@ -42,309 +47,261 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     return Scaffold(
       backgroundColor: AppTheme.background,
-      body: AmbientLuxuryBackground(
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.symmetric(
-                horizontal: size.width < 400 ? 18 : 26,
-                vertical: 32,
-              ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.symmetric(
+              horizontal: size.width < 380 ? 18 : 24,
+              vertical: 28,
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Royal Emblem Medallion
+                  // Brand Identity Header
                   Container(
-                    padding: const EdgeInsets.all(3),
+                    width: 72,
+                    height: 72,
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [AppTheme.primary, AppTheme.accent],
+                      color: AppTheme.surface,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: AppTheme.borderLight,
+                        width: 1,
+                      ),
+                    ),
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const Icon(
+                        Icons.apartment_rounded,
+                        size: 36,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'SOCIMCO PMS',
+                    style: GoogleFonts.outfit(
+                      color: AppTheme.textPrimary,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'BITAR REAL ESTATE MANAGEMENT',
+                    style: GoogleFonts.inter(
+                      color: AppTheme.textMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+
+                  // Structured Sign-In Card
+                  Container(
+                    padding: EdgeInsets.all(size.width < 380 ? 20 : 28),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surface,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: AppTheme.border,
+                        width: 1,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: AppTheme.primary.withValues(alpha: 0.35),
-                          blurRadius: 32,
-                          spreadRadius: 2,
-                        ),
-                        BoxShadow(
-                          color: AppTheme.accent.withValues(alpha: 0.2),
-                          blurRadius: 44,
-                          spreadRadius: 4,
+                          color: Colors.black.withValues(alpha: 0.28),
+                          blurRadius: 24,
+                          offset: const Offset(0, 8),
                         ),
                       ],
                     ),
-                    child: Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF0A131C),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Image.asset(
-                        'assets/images/logo.png',
-                        width: 52,
-                        height: 52,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => const Icon(
-                          Icons.apartment_rounded,
-                          size: 46,
-                          color: AppTheme.accent,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 22),
-                  ShaderMask(
-                    shaderCallback: (bounds) => const LinearGradient(
-                      colors: [
-                        Colors.white,
-                        Color(0xFFE2F1EC),
-                        AppTheme.accent,
-                      ],
-                    ).createShader(bounds),
-                    child: Text(
-                      'SOCIMCO PMS',
-                      style: GoogleFonts.outfit(
-                        color: Colors.white,
-                        fontSize: 32,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: AppTheme.accent.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: AppTheme.accent.withValues(alpha: 0.35),
-                      ),
-                    ),
-                    child: Text(
-                      'BITAR REAL ESTATE MANAGEMENT',
-                      style: GoogleFonts.plusJakartaSans(
-                        color: AppTheme.accent,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.8,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 36),
-
-                  // Frosted Obsidian Glass Login Card
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 460),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(28),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                        child: Container(
-                          padding: EdgeInsets.all(size.width < 400 ? 22 : 32),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                Color(0xE6111F2E),
-                                Color(0xD90A121B),
-                              ],
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            'Sign in to your account',
+                            style: GoogleFonts.outfit(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary,
                             ),
-                            borderRadius: BorderRadius.circular(28),
-                            border: Border.all(
-                              color: AppTheme.primary.withValues(alpha: 0.28),
-                              width: 1.2,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.45),
-                                blurRadius: 30,
-                                offset: const Offset(0, 14),
-                              ),
-                            ],
                           ),
-                          child: Form(
-                            key: _formKey,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Text(
-                                  'Executive Sign In',
-                                  style: GoogleFonts.outfit(
-                                    fontSize: 23,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppTheme.textPrimary,
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Enter your credentials to access your workspace',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 12.5,
-                                    color: AppTheme.textMuted,
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                                const SizedBox(height: 26),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Enter your workspace credentials to continue',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              color: AppTheme.textMuted,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
 
-                                // Error message
-                                if (authState.error != null) ...[
-                                  Container(
-                                    padding: const EdgeInsets.all(13),
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.danger.withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: AppTheme.danger.withValues(alpha: 0.4),
+                          if (authState.error != null) ...[
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppTheme.danger.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: AppTheme.danger.withValues(alpha: 0.35),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.error_outline_rounded,
+                                    color: AppTheme.danger,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      authState.error!,
+                                      style: GoogleFonts.inter(
+                                        color: AppTheme.danger,
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
-                                    child: Row(
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                          ],
+
+                          Text(
+                            'Username or Email',
+                            style: GoogleFonts.inter(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: _loginCtrl,
+                            keyboardType: TextInputType.emailAddress,
+                            textInputAction: TextInputAction.next,
+                            autocorrect: false,
+                            style: GoogleFonts.inter(
+                              color: AppTheme.textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            decoration: const InputDecoration(
+                              hintText: 'Enter your username or email',
+                              prefixIcon: Icon(
+                                Icons.person_outline_rounded,
+                                size: 20,
+                              ),
+                            ),
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return 'Please enter your username or email';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 18),
+
+                          Text(
+                            'Password',
+                            style: GoogleFonts.inter(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: _passwordCtrl,
+                            obscureText: _obscurePassword,
+                            textInputAction: TextInputAction.done,
+                            onFieldSubmitted: (_) => _handleLogin(),
+                            style: GoogleFonts.inter(
+                              color: AppTheme.textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'Enter your password',
+                              prefixIcon: const Icon(
+                                Icons.lock_outline_rounded,
+                                size: 20,
+                              ),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_off_outlined
+                                      : Icons.visibility_outlined,
+                                  color: AppTheme.textMuted,
+                                  size: 19,
+                                ),
+                                onPressed: () => setState(
+                                  () => _obscurePassword = !_obscurePassword,
+                                ),
+                              ),
+                            ),
+                            validator: (v) {
+                              if (v == null || v.isEmpty) {
+                                return 'Please enter your password';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 26),
+
+                          SizedBox(
+                            height: 50,
+                            child: ElevatedButton(
+                              onPressed: authState.isLoading ? null : _handleLogin,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                foregroundColor: const Color(0xFF04130F),
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child: authState.isLoading
+                                  ? const SizedBox(
+                                      height: 20,
+                                      width: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2.2,
+                                        color: Color(0xFF04130F),
+                                      ),
+                                    )
+                                  : Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
-                                        const Icon(Icons.error_outline_rounded, color: AppTheme.danger, size: 20),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Text(
-                                            authState.error!,
-                                            style: GoogleFonts.plusJakartaSans(
-                                              color: AppTheme.danger,
-                                              fontSize: 12.5,
-                                              fontWeight: FontWeight.w600,
-                                            ),
+                                        Text(
+                                          'Sign In',
+                                          style: GoogleFonts.outfit(
+                                            fontSize: 15.5,
+                                            fontWeight: FontWeight.w700,
                                           ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        const Icon(
+                                          Icons.arrow_forward_rounded,
+                                          size: 18,
                                         ),
                                       ],
                                     ),
-                                  ),
-                                  const SizedBox(height: 18),
-                                ],
-
-                                // Email or Username
-                                Text(
-                                  'USERNAME OR EMAIL',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 10.5,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 1.1,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: _loginCtrl,
-                                  keyboardType: TextInputType.text,
-                                  autocorrect: false,
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.textPrimary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  decoration: const InputDecoration(
-                                    hintText: 'Enter username or email',
-                                    prefixIcon: Icon(Icons.person_outline_rounded, color: AppTheme.primary),
-                                  ),
-                                  validator: (v) {
-                                    if (v == null || v.isEmpty) return 'Enter your email or username';
-                                    return null;
-                                  },
-                                ),
-                                const SizedBox(height: 18),
-
-                                // Password
-                                Text(
-                                  'PASSWORD',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 10.5,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 1.1,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: _passwordCtrl,
-                                  obscureText: _obscurePassword,
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.textPrimary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  decoration: InputDecoration(
-                                    hintText: 'Enter your password',
-                                    prefixIcon: const Icon(Icons.lock_outline_rounded, color: AppTheme.primary),
-                                    suffixIcon: IconButton(
-                                      icon: Icon(
-                                        _obscurePassword
-                                            ? Icons.visibility_off_outlined
-                                            : Icons.visibility_outlined,
-                                        color: AppTheme.textSecondary,
-                                      ),
-                                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                                    ),
-                                  ),
-                                  validator: (v) {
-                                    if (v == null || v.isEmpty) return 'Enter password';
-                                    return null;
-                                  },
-                                ),
-                                const SizedBox(height: 30),
-
-                                // Royal Teal Gradient Submit Button
-                                Container(
-                                  height: 56,
-                                  decoration: BoxDecoration(
-                                    gradient: AppTheme.primaryGradient,
-                                    borderRadius: BorderRadius.circular(16),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: AppTheme.primary.withValues(alpha: 0.35),
-                                        blurRadius: 18,
-                                        offset: const Offset(0, 6),
-                                      ),
-                                    ],
-                                  ),
-                                  child: ElevatedButton(
-                                    onPressed: authState.isLoading ? null : _handleLogin,
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.transparent,
-                                      shadowColor: Colors.transparent,
-                                      foregroundColor: const Color(0xFF04130F),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                    ),
-                                    child: authState.isLoading
-                                        ? const SizedBox(
-                                            height: 24,
-                                            width: 24,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2.5,
-                                              color: Color(0xFF04130F),
-                                            ),
-                                          )
-                                        : Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              Text(
-                                                'Access Workspace',
-                                                style: GoogleFonts.outfit(
-                                                  fontSize: 16.5,
-                                                  fontWeight: FontWeight.w800,
-                                                  letterSpacing: 0.4,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              const Icon(Icons.arrow_forward_rounded, size: 20),
-                                            ],
-                                          ),
-                                  ),
-                                ),
-                              ],
                             ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ),

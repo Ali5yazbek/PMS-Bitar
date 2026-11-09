@@ -1,8 +1,9 @@
-// ─── App Router (go_router with Persistent StatefulShellRoute) ───────────────
+// ─── App Router (go_router with Role-Aware StatefulShellRoute) ────────────────
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../screens/splash_screen.dart';
 import '../screens/login_screen.dart';
@@ -73,33 +74,93 @@ final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 final Map<String, List<String>> roleAllowedPrefixes = {
   'admin': ['/'], // Admin can access everything
-  'manager': ['/manager-dashboard', '/buildings', '/financial-reports', '/reports', '/workshop', '/warehouse', '/settings', '/global-search', '/contracts', '/ac-maintenance', '/energy', '/energy/verification', '/gen-report', '/notifications'],
-  'agent': ['/agent-dashboard', '/agent-apartments', '/agent-generators', '/agent-history', '/agent-daily-report', '/agent-subscriptions', '/agent-rent-collection', '/agent-collection-history', '/global-search', '/qr-scanner', '/apartment-costs'],
-  'tenant': ['/tenant-dashboard', '/tenant-payments', '/tenant-contract', '/tenant-subscriptions', '/tenant-rent'],
-  'cashier': ['/cashier-dashboard', '/pos', '/rent', '/global-search'],
-  'maintenance': ['/maintenance-dashboard', '/ac-maintenance', '/maintenance-history', '/workshop'],
+  'manager': [
+    '/manager-dashboard',
+    '/buildings',
+    '/financial-reports',
+    '/reports',
+    '/workshop',
+    '/warehouse',
+    '/settings',
+    '/global-search',
+    '/contracts',
+    '/ac-maintenance',
+    '/energy',
+    '/energy/verification',
+    '/gen-report',
+    '/notifications',
+  ],
+  'agent': [
+    '/agent-dashboard',
+    '/agent-apartments',
+    '/agent-generators',
+    '/agent-history',
+    '/agent-daily-report',
+    '/agent-subscriptions',
+    '/agent-rent-collection',
+    '/agent-collection-history',
+    '/global-search',
+    '/qr-scanner',
+    '/apartment-costs',
+    '/settings',
+    '/notifications',
+  ],
+  'tenant': [
+    '/tenant-dashboard',
+    '/tenant-payments',
+    '/tenant-contract',
+    '/tenant-subscriptions',
+    '/tenant-rent',
+    '/settings',
+    '/notifications',
+  ],
+  'cashier': [
+    '/cashier-dashboard',
+    '/pos',
+    '/rent',
+    '/global-search',
+    '/settings',
+    '/notifications',
+  ],
+  'maintenance': [
+    '/maintenance-dashboard',
+    '/ac-maintenance',
+    '/maintenance-history',
+    '/workshop',
+    '/settings',
+    '/global-search',
+    '/notifications',
+  ],
 };
 
-bool _isRouteAllowed(String role, String path) {
-  if (role == 'admin') return true;
-  final allowed = roleAllowedPrefixes[role] ?? [];
+String getDefaultRouteForRole(String? role) {
+  final cleanRole = User.normalizeRole(role);
+  switch (cleanRole) {
+    case 'manager':
+      return '/manager-dashboard';
+    case 'agent':
+      return '/agent-dashboard';
+    case 'tenant':
+      return '/tenant-dashboard';
+    case 'cashier':
+      return '/cashier-dashboard';
+    case 'maintenance':
+      return '/maintenance-dashboard';
+    default:
+      return '/'; // Admin
+  }
+}
+
+bool isRouteAllowedForRole(String? role, String path) {
+  final cleanRole = User.normalizeRole(role);
+  if (cleanRole == 'admin') return true;
+  final allowed = roleAllowedPrefixes[cleanRole] ?? [];
   for (final prefix in allowed) {
     if (path == prefix || path.startsWith('$prefix/')) {
       return true;
     }
   }
   return false;
-}
-
-String _getDefaultRoute(String? role) {
-  switch (role) {
-    case 'manager': return '/manager-dashboard';
-    case 'agent': return '/agent-dashboard';
-    case 'tenant': return '/tenant-dashboard';
-    case 'cashier': return '/cashier-dashboard';
-    case 'maintenance': return '/maintenance-dashboard';
-    default: return '/'; // Admin
-  }
 }
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -114,19 +175,23 @@ final routerProvider = Provider<GoRouter>((ref) {
       final isAuth = authState.isAuthenticated;
       final isLoading = authState.isLoading;
       final isLoginPage = state.matchedLocation == '/login';
-      final role = authState.user?.role;
+      final role = User.normalizeRole(authState.user?.role);
 
       if (isLoading) return null;
       if (!isAuth && !isLoginPage) return '/login';
 
       if (isAuth && isLoginPage) {
-        return _getDefaultRoute(role);
+        return getDefaultRouteForRole(role);
       }
 
       if (isAuth) {
         final location = state.matchedLocation;
-        if (!_isRouteAllowed(role ?? '', location)) {
-          return _getDefaultRoute(role);
+        // Non-admins attempting to access root '/' MUST be redirected to their role dashboard
+        if (location == '/' && role != 'admin') {
+          return getDefaultRouteForRole(role);
+        }
+        if (!isRouteAllowedForRole(role, location)) {
+          return getDefaultRouteForRole(role);
         }
       }
 

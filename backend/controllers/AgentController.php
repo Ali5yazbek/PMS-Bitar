@@ -1018,6 +1018,24 @@ class AgentController {
         $logStmt = $this->db->prepare("INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details) VALUES (?, 'Generator Log', 'Generator', ?, ?)");
         $logStmt->execute([$submitted_by, $gen_id, "Submitted daily report (Fuel Added: {$fuel_added}L)"]);
 
+        // Notify admins with the agent's real name
+        try {
+            $uStmt = $this->db->prepare("SELECT name FROM users WHERE id = ? LIMIT 1");
+            $uStmt->execute([$submitted_by]);
+            $agentName = $uStmt->fetchColumn() ?: 'Field Agent';
+            $genName = $generatorData['name'] ?? 'Generator';
+            $adminsStmt = $this->db->query("SELECT id FROM users WHERE role IN ('admin', 'super_admin', 'manager') LIMIT 10");
+            foreach ($adminsStmt->fetchAll(PDO::FETCH_COLUMN) as $adminId) {
+                $notifTitle = "⚡ {$agentName} submitted Generator Report — waiting for your response";
+                $notifMsg = "{$agentName} has submitted a generator reading for {$genName} — waiting for your response.\nWhat is it: Generator Daily Report (Meter: {$new_meter_value} hrs • Fuel Added: {$fuel_added}L)";
+                $notifStmt = $this->db->prepare("
+                    INSERT INTO notifications (user_id, title, message, type, seen_by_agent)
+                    VALUES (?, ?, ?, 'generator_report', 0)
+                ");
+                $notifStmt->execute([$adminId, $notifTitle, $notifMsg]);
+            }
+        } catch (\Throwable $ne) {}
+
         echo json_encode(['success' => true]);
 
     }
@@ -1462,17 +1480,22 @@ class AgentController {
             $infoStmt->execute([$apartment_id]);
             $info = $infoStmt->fetch(PDO::FETCH_ASSOC);
 
-            // Notify admins
+            // Notify admins with the agent's real name
             try {
-                $adminsStmt = $this->db->query("SELECT id FROM users WHERE role IN ('admin', 'super_admin') LIMIT 5");
+                $uStmt = $this->db->prepare("SELECT name FROM users WHERE id = ? LIMIT 1");
+                $uStmt->execute([$submitted_by]);
+                $agentName = $uStmt->fetchColumn() ?: 'Field Agent';
+                $fmtAmt = number_format((float)$amount);
+                $adminsStmt = $this->db->query("SELECT id FROM users WHERE role IN ('admin', 'super_admin', 'manager') LIMIT 10");
                 $admins = $adminsStmt->fetchAll(PDO::FETCH_COLUMN);
                 foreach ($admins as $adminId) {
-                    $notifMsg = "Agent submitted a purchase of \${$amount} for {$info['building_name']} - Apt {$info['apartment_code']}. Please review.";
+                    $notifTitle = "🛒 {$agentName} submitted Purchase (CFA {$fmtAmt}) — waiting for your response";
+                    $notifMsg = "{$agentName} has submitted a purchase of CFA {$fmtAmt} from {$supplier_name} for {$info['building_name']} • Apt {$info['apartment_code']} — waiting for your response.\nWhat is it: Apartment Purchase" . ($notes ? " — {$notes}" : "");
                     $notifStmt = $this->db->prepare("
                         INSERT INTO notifications (user_id, title, message, type, seen_by_agent)
-                        VALUES (?, 'New Purchase Submission 🛒', ?, 'agent_purchase_pending', 0)
+                        VALUES (?, ?, ?, 'agent_purchase_pending', 0)
                     ");
-                    $notifStmt->execute([$adminId, $notifMsg]);
+                    $notifStmt->execute([$adminId, $notifTitle, $notifMsg]);
                 }
             } catch (Exception $ne) {
                 // Notification failure is non-fatal
@@ -1960,6 +1983,46 @@ class AgentController {
         $stmt->execute([$user_id, $building, $apartment, $supplier, $amount, $items, $notes]);
         $insertId = $this->db->lastInsertId();
 
+        $receiptPath = null;
+        $uploadDir = __DIR__ . '/../uploads/receipts/agent/';
+        if (!is_dir($uploadDir)) {
+            @mkdir($uploadDir, 0777, true);
+        }
+        if (isset($_FILES['receipt_image']) && $_FILES['receipt_image']['error'] === UPLOAD_ERR_OK) {
+            $ext = strtolower(pathinfo($_FILES['receipt_image']['name'], PATHINFO_EXTENSION) ?: 'jpg');
+            $filename = uniqid('agent_purchase_') . '.' . $ext;
+            if (move_uploaded_file($_FILES['receipt_image']['tmp_name'], $uploadDir . $filename)) {
+                $receiptPath = 'uploads/receipts/agent/' . $filename;
+            }
+        } else {
+            $rawB64 = $data['receipt_image'] ?? (($data['receipts'][0] ?? null));
+            if (is_string($rawB64) && strlen($rawB64) > 32) {
+                $b64 = $rawB64;
+                if (str_starts_with($b64, 'base64:')) {
+                    $b64 = substr($b64, 7);
+                } elseif (str_starts_with($b64, 'data:image')) {
+                    $comma = strpos($b64, ',');
+                    if ($comma !== false) $b64 = substr($b64, $comma + 1);
+                }
+                $decoded = base64_decode($b64, true);
+                if ($decoded !== false && strlen($decoded) > 64) {
+                    $filename = uniqid('agent_purchase_') . '.jpg';
+                    if (@file_put_contents($uploadDir . $filename, $decoded) !== false) {
+                        $receiptPath = 'uploads/receipts/agent/' . $filename;
+                    }
+                }
+            }
+        }
+        if ($receiptPath) {
+            try {
+                $colCheck = $this->db->query("SHOW COLUMNS FROM agent_purchases LIKE 'receipt_image'");
+                if (!$colCheck->fetch()) {
+                    $this->db->exec("ALTER TABLE agent_purchases ADD COLUMN receipt_image TEXT NULL AFTER notes");
+                }
+                $this->db->prepare("UPDATE agent_purchases SET receipt_image = ? WHERE id = ?")->execute([$receiptPath, $insertId]);
+            } catch (\Throwable $e) {}
+        }
+
         // 2. Find matching apartment_id in database & insert into apartment_cost_deployments
         $aptStmt = $this->db->prepare("
             SELECT a.id 
@@ -2000,6 +2063,10 @@ class AgentController {
                 VALUES (?, ?, ?, ?, CURDATE(), 'Pending', ?)
             ");
             $stmtDep->execute([$aptId, $supplier, $numericAmount, $fullNotes, $user_id]);
+            if ($receiptPath) {
+                $depId = $this->db->lastInsertId();
+                $this->db->prepare("UPDATE apartment_cost_deployments SET receipt_image = ? WHERE id = ?")->execute([$receiptPath, $depId]);
+            }
         }
 
         $logStmt = $this->db->prepare("INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details) VALUES (?, 'Purchase Submission', 'Purchase', ?, ?)");

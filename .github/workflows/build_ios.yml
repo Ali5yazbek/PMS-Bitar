@@ -20,23 +20,16 @@ on:
 jobs:
   build-ios:
     name: Build Native iOS IPA
-    runs-on: macos-14
+    runs-on: macos-13
     timeout-minutes: 60
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Java for Android/Shared tools
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
       - name: Set up Flutter SDK
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.0'
           channel: 'stable'
           cache: true
 

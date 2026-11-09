@@ -1,13 +1,15 @@
-// ─── Main Shell (Luxury Obsidian & Royal Teal/Gold Navigation Shell) ─────────
-import 'dart:ui';
+// ─── Main Shell (Enterprise Navigation & Workspace Shell) ────────────────────
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../config/app_theme.dart';
+import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/currency_provider.dart';
 import '../services/api_service.dart';
+import '../services/notification_service.dart';
+import '../services/update_service.dart';
 import '../widgets/common/smart_bottom_nav.dart';
 
 class MainShell extends ConsumerStatefulWidget {
@@ -25,8 +27,20 @@ class MainShell extends ConsumerStatefulWidget {
 }
 
 class _MainShellState extends ConsumerState<MainShell> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final role = ref.read(authProvider).user?.role;
+      ApiService().prefetchForRole(role);
+      UpdateService.checkForUpdates(context);
+    });
+  }
+
   List<SmartNavItem> _getNavItems(String? role) {
-    switch (role) {
+    final cleanRole = User.normalizeRole(role);
+    switch (cleanRole) {
       case 'manager':
         return const [
           SmartNavItem(icon: Icons.dashboard_outlined, activeIcon: Icons.dashboard_rounded, label: 'Dashboard', path: '/manager-dashboard'),
@@ -75,14 +89,19 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 
   List<SmartNavItem> _getOverflowItems(String? role) {
-    switch (role) {
+    final cleanRole = User.normalizeRole(role);
+    switch (cleanRole) {
+      case 'maintenance':
+      case 'tenant':
+      case 'cashier':
+        return const [];
       case 'agent':
         return const [
-          SmartNavItem(icon: Icons.attach_money_outlined, activeIcon: Icons.attach_money_rounded, label: 'Rent Collection', path: '/agent-rent-collection'),
+          SmartNavItem(icon: Icons.payments_outlined, activeIcon: Icons.payments_rounded, label: 'Rent Collection', path: '/agent-rent-collection'),
           SmartNavItem(icon: Icons.receipt_long_outlined, activeIcon: Icons.receipt_long_rounded, label: 'Collection History', path: '/agent-collection-history'),
           SmartNavItem(icon: Icons.history_edu_outlined, activeIcon: Icons.history_edu_rounded, label: 'Reading History', path: '/agent-history'),
           SmartNavItem(icon: Icons.task_alt_outlined, activeIcon: Icons.task_alt_rounded, label: 'Daily Report', path: '/agent-daily-report'),
-          SmartNavItem(icon: Icons.shopping_cart_outlined, activeIcon: Icons.shopping_cart_rounded, label: 'Apartment Cost', path: '/apartment-costs'),
+          SmartNavItem(icon: Icons.shopping_bag_outlined, activeIcon: Icons.shopping_bag_rounded, label: 'Apartment Cost', path: '/apartment-costs'),
         ];
       case 'manager':
         return const [
@@ -99,7 +118,7 @@ class _MainShellState extends ConsumerState<MainShell> {
         // Admin overflow
         return const [
           SmartNavItem(icon: Icons.apartment_outlined, activeIcon: Icons.apartment_rounded, label: 'Buildings', path: '/buildings'),
-          SmartNavItem(icon: Icons.people_outline, activeIcon: Icons.people_rounded, label: 'Tenants', path: '/tenants'),
+          SmartNavItem(icon: Icons.people_outline_rounded, activeIcon: Icons.people_rounded, label: 'Tenants', path: '/tenants'),
           SmartNavItem(icon: Icons.description_outlined, activeIcon: Icons.description_rounded, label: 'Contracts', path: '/contracts'),
           SmartNavItem(icon: Icons.bar_chart_outlined, activeIcon: Icons.bar_chart_rounded, label: 'Reports', path: '/reports'),
           SmartNavItem(icon: Icons.settings_outlined, activeIcon: Icons.settings_rounded, label: 'Settings', path: '/settings'),
@@ -116,7 +135,6 @@ class _MainShellState extends ConsumerState<MainShell> {
     final role = ref.watch(authProvider).user?.role;
     final navItems = _getNavItems(role);
 
-    // Calculate current tab index for SmartBottomNav
     int currentIndex = 0;
     final navItemIndex = navItems.indexWhere(
       (item) => item.path.isNotEmpty && (location == item.path || location.startsWith('${item.path}/')),
@@ -129,7 +147,7 @@ class _MainShellState extends ConsumerState<MainShell> {
 
     return Scaffold(
       backgroundColor: AppTheme.background,
-      extendBody: !isDesktop,
+      extendBody: false,
       appBar: isDesktop ? null : _buildMobileAppBar(location, role),
       bottomNavigationBar: isDesktop
           ? null
@@ -153,62 +171,40 @@ class _MainShellState extends ConsumerState<MainShell> {
               },
               onMoreTap: () => _showMoreMenu(_getOverflowItems(role)),
             ),
-      floatingActionButton: role == 'admin'
+      floatingActionButton: User.normalizeRole(role) == 'admin'
           ? Padding(
               padding: EdgeInsets.only(bottom: isDesktop ? 0 : 4),
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: AppTheme.primaryGradient,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppTheme.primary.withValues(alpha: 0.4),
-                      blurRadius: 18,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
+              child: FloatingActionButton.extended(
+                onPressed: () => context.push('/admin-chat'),
+                backgroundColor: AppTheme.primary,
+                foregroundColor: const Color(0xFF04130F),
+                elevation: 3,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                child: FloatingActionButton.extended(
-                  onPressed: () => context.push('/admin-chat'),
-                  backgroundColor: Colors.transparent,
-                  elevation: 0,
-                  highlightElevation: 0,
-                  icon: const Icon(Icons.psychology_rounded, color: Color(0xFF04130F), size: 22),
-                  label: Text(
-                    'Agency AI',
-                    style: GoogleFonts.outfit(
-                      color: const Color(0xFF04130F),
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.2,
-                    ),
+                icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                label: Text(
+                  'Agency AI',
+                  style: GoogleFonts.outfit(
+                    color: const Color(0xFF04130F),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13.5,
+                    letterSpacing: 0.1,
                   ),
                 ),
               ),
             )
           : null,
-      body: AmbientLuxuryBackground(
-        child: SafeArea(
-          top: false,
-          bottom: false,
-          child: Row(
-            children: [
-              if (isDesktop) _buildSidebar(location, role),
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(bottom: isDesktop ? 0 : 88),
-                  child: ClipRRect(
-                    borderRadius: isDesktop
-                        ? const BorderRadius.only(
-                            topLeft: Radius.circular(28),
-                            bottomLeft: Radius.circular(28),
-                          )
-                        : BorderRadius.zero,
-                    child: widget.navigationShell ?? widget.child ?? const SizedBox.shrink(),
-                  ),
-                ),
-              ),
-            ],
-          ),
+      body: SafeArea(
+        top: false,
+        bottom: false,
+        child: Row(
+          children: [
+            if (isDesktop) _buildSidebar(location, role),
+            Expanded(
+              child: widget.navigationShell ?? widget.child ?? const SizedBox.shrink(),
+            ),
+          ],
         ),
       ),
     );
@@ -219,66 +215,37 @@ class _MainShellState extends ConsumerState<MainShell> {
     final initial = (user?.name.isNotEmpty == true ? user!.name : 'S')[0].toUpperCase();
 
     return PreferredSize(
-      preferredSize: const Size.fromHeight(64),
+      preferredSize: const Size.fromHeight(60),
       child: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppTheme.surface,
         elevation: 0,
         scrolledUnderElevation: 0,
         titleSpacing: 0,
-        flexibleSpace: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        shape: const Border(
+          bottom: BorderSide(color: AppTheme.border, width: 1),
+        ),
+        leadingWidth: 56,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 14, top: 12, bottom: 12, right: 6),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => context.push('/settings'),
             child: Container(
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xEE081018),
-                    Color(0xD90B1520),
-                  ],
+                color: AppTheme.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: AppTheme.primary.withValues(alpha: 0.3),
+                  width: 1,
                 ),
-                border: Border(
-                  bottom: BorderSide(
-                    color: AppTheme.border.withValues(alpha: 0.7),
-                    width: 1,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        leadingWidth: 58,
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 14, top: 10, bottom: 10, right: 6),
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [AppTheme.primary, AppTheme.accent],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: AppTheme.primary.withValues(alpha: 0.35),
-                  blurRadius: 10,
-                ),
-              ],
-            ),
-            padding: const EdgeInsets.all(1.8),
-            child: Container(
-              decoration: const BoxDecoration(
-                color: AppTheme.surface,
-                shape: BoxShape.circle,
               ),
               alignment: Alignment.center,
               child: Text(
                 initial,
                 style: GoogleFonts.outfit(
                   color: AppTheme.primary,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
                 ),
               ),
             ),
@@ -293,30 +260,35 @@ class _MainShellState extends ConsumerState<MainShell> {
               style: GoogleFonts.outfit(
                 color: AppTheme.textPrimary,
                 fontWeight: FontWeight.w700,
-                fontSize: 18,
-                letterSpacing: -0.3,
+                fontSize: 17,
+                letterSpacing: -0.2,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
+            const SizedBox(height: 1),
             Row(
               children: [
                 Container(
                   width: 5,
                   height: 5,
                   decoration: const BoxDecoration(
-                    color: AppTheme.accent,
+                    color: AppTheme.primary,
                     shape: BoxShape.circle,
                   ),
                 ),
                 const SizedBox(width: 5),
-                Text(
-                  'SOCIMCO • ${(role ?? 'ADMIN').toUpperCase()}',
-                  style: GoogleFonts.plusJakartaSans(
-                    color: AppTheme.accent,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 9.5,
-                    letterSpacing: 0.9,
+                Flexible(
+                  child: Text(
+                    'SOCIMCO • ${User.normalizeRole(role).toUpperCase()}',
+                    style: GoogleFonts.inter(
+                      color: AppTheme.textMuted,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 10,
+                      letterSpacing: 0.6,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
@@ -324,38 +296,30 @@ class _MainShellState extends ConsumerState<MainShell> {
           ],
         ),
         actions: [
-          // Luxury Gold/Teal Currency Pill
+          // Currency Toggle Pill
           GestureDetector(
             onTap: () => ref.read(currencyProvider.notifier).toggleCurrency(),
             child: Container(
               margin: const EdgeInsets.symmetric(vertical: 13),
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    AppTheme.accent.withValues(alpha: 0.18),
-                    AppTheme.primary.withValues(alpha: 0.12),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: AppTheme.accent.withValues(alpha: 0.45),
-                  width: 1,
-                ),
+                color: AppTheme.surfaceHover,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.borderLight, width: 1),
               ),
               alignment: Alignment.center,
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.currency_exchange_rounded, size: 12, color: AppTheme.accent),
+                  const Icon(Icons.currency_exchange_rounded, size: 12, color: AppTheme.primary),
                   const SizedBox(width: 4),
                   Text(
                     ref.watch(currencyProvider).currency,
-                    style: GoogleFonts.outfit(
-                      color: AppTheme.accent,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 12,
-                      letterSpacing: 0.4,
+                    style: GoogleFonts.inter(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11.5,
+                      letterSpacing: 0.3,
                     ),
                   ),
                 ],
@@ -365,22 +329,25 @@ class _MainShellState extends ConsumerState<MainShell> {
           const SizedBox(width: 6),
           _buildTopActionButton(
             icon: Icons.search_rounded,
-            color: AppTheme.textPrimary,
+            color: AppTheme.textSecondary,
+            tooltip: 'Search',
             onTap: () => context.push('/global-search'),
           ),
           const SizedBox(width: 6),
           _buildTopActionButton(
             icon: Icons.notifications_none_rounded,
-            color: AppTheme.textPrimary,
+            color: AppTheme.textSecondary,
+            tooltip: 'Notifications',
             onTap: () => _showNotifications(context),
           ),
           const SizedBox(width: 6),
           _buildTopActionButton(
-            icon: Icons.power_settings_new_rounded,
+            icon: Icons.logout_rounded,
             color: AppTheme.danger,
-            borderColor: AppTheme.danger.withValues(alpha: 0.35),
-            bgColor: AppTheme.danger.withValues(alpha: 0.1),
-            onTap: () => ref.read(authProvider.notifier).logout(),
+            borderColor: AppTheme.danger.withValues(alpha: 0.25),
+            bgColor: AppTheme.danger.withValues(alpha: 0.08),
+            tooltip: 'Sign Out',
+            onTap: () => _confirmLogout(context),
           ),
           const SizedBox(width: 12),
         ],
@@ -392,27 +359,161 @@ class _MainShellState extends ConsumerState<MainShell> {
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
+    String? tooltip,
     Color? borderColor,
     Color? bgColor,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        margin: const EdgeInsets.symmetric(vertical: 13),
-        decoration: BoxDecoration(
-          color: bgColor ?? AppTheme.surfaceHover.withValues(alpha: 0.8),
-          borderRadius: BorderRadius.circular(11),
-          border: Border.all(
-            color: borderColor ?? AppTheme.border,
-            width: 1,
+    return Tooltip(
+      message: tooltip ?? '',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Container(
+          width: 34,
+          height: 34,
+          margin: const EdgeInsets.symmetric(vertical: 13),
+          decoration: BoxDecoration(
+            color: bgColor ?? AppTheme.surfaceHover,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: borderColor ?? AppTheme.border,
+              width: 1,
+            ),
           ),
+          alignment: Alignment.center,
+          child: Icon(icon, color: color, size: 17),
         ),
-        alignment: Alignment.center,
-        child: Icon(icon, color: color, size: 18),
       ),
     );
+  }
+
+  Future<void> _confirmLogout(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: AppTheme.border),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppTheme.danger.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.logout_rounded, color: AppTheme.danger, size: 18),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Sign Out',
+              style: GoogleFonts.outfit(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to sign out of your SOCIMCO account on this device?',
+          style: GoogleFonts.inter(
+            color: AppTheme.textSecondary,
+            fontSize: 13.5,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.inter(
+                color: AppTheme.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.danger,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: Text(
+              'Sign Out',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await ref.read(authProvider.notifier).logout();
+    }
+  }
+
+  String _cleanNotificationTitle(String raw) {
+    return raw
+        .replaceAll(
+          RegExp(
+            r'^[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\s]+',
+            unicode: true,
+          ),
+          '',
+        )
+        .trim();
+  }
+
+  IconData _iconForNotifType(String? type) {
+    switch ((type ?? '').toLowerCase()) {
+      case 'energy':
+      case 'power':
+        return Icons.electric_bolt_rounded;
+      case 'ac':
+        return Icons.ac_unit_rounded;
+      case 'maintenance':
+        return Icons.build_circle_outlined;
+      case 'purchase':
+        return Icons.shopping_bag_outlined;
+      case 'rent':
+      case 'payment':
+        return Icons.payments_outlined;
+      case 'contract':
+        return Icons.description_outlined;
+      default:
+        return Icons.notifications_outlined;
+    }
+  }
+
+  Color _colorForNotifType(String? type) {
+    switch ((type ?? '').toLowerCase()) {
+      case 'energy':
+      case 'power':
+        return AppTheme.warning;
+      case 'ac':
+        return AppTheme.info;
+      case 'maintenance':
+        return AppTheme.accent;
+      case 'purchase':
+        return AppTheme.secondary;
+      case 'rent':
+      case 'payment':
+        return AppTheme.success;
+      default:
+        return AppTheme.primary;
+    }
   }
 
   void _showNotifications(BuildContext context) {
@@ -421,209 +522,240 @@ class _MainShellState extends ConsumerState<MainShell> {
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-            child: Container(
-              height: MediaQuery.of(context).size.height * 0.72,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0xF5101D2A),
-                    Color(0xFA060B10),
-                  ],
-                ),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-                border: Border.all(
-                  color: AppTheme.primary.withValues(alpha: 0.25),
-                  width: 1.2,
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.74,
+          decoration: const BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border(
+              top: BorderSide(color: AppTheme.borderLight, width: 1),
+            ),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.borderLight,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              child: Column(
-                children: [
-                  const SizedBox(height: 12),
-                  Container(
-                    width: 44,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppTheme.borderLight,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 18, 18, 14),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 14, 14),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
                       children: [
-                        Row(
+                        Container(
+                          padding: const EdgeInsets.all(9),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: AppTheme.primary.withValues(alpha: 0.25)),
+                          ),
+                          child: const Icon(Icons.notifications_none_rounded, color: AppTheme.primary, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(9),
-                              decoration: BoxDecoration(
-                                color: AppTheme.primary.withValues(alpha: 0.14),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
+                            Text(
+                              'Notifications',
+                              style: GoogleFonts.outfit(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.textPrimary,
                               ),
-                              child: const Icon(Icons.notifications_active_rounded, color: AppTheme.primary, size: 20),
                             ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Notifications',
-                                  style: GoogleFonts.outfit(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppTheme.textPrimary,
-                                  ),
-                                ),
-                                Text(
-                                  'Real-time system alerts & updates',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11.5,
-                                    color: AppTheme.textMuted,
-                                  ),
-                                ),
-                              ],
+                            Text(
+                              'System alerts and operational updates',
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color: AppTheme.textMuted,
+                              ),
                             ),
                           ],
                         ),
+                      ],
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            context.push('/notifications');
+                          },
+                          child: Text(
+                            'View All',
+                            style: GoogleFonts.inter(
+                              color: AppTheme.primary,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
                         IconButton(
-                          icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary),
+                          icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary, size: 20),
                           onPressed: () => Navigator.pop(context),
                         ),
                       ],
                     ),
-                  ),
-                  const Divider(color: AppTheme.border, height: 1),
-                  Expanded(
-                    child: FutureBuilder<dynamic>(
-                      future: ApiService().get('/notifications/unread').then((res) => res.data),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
-                        }
-                        final notifications = (snapshot.data is List) ? (snapshot.data as List<dynamic>) : <dynamic>[];
-                        if (snapshot.hasError || notifications.isEmpty) {
-                          return Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
+                  ],
+                ),
+              ),
+              const Divider(color: AppTheme.border, height: 1),
+              Expanded(
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: NotificationService().fetchComprehensiveRoleNotifications(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: AppTheme.primary, strokeWidth: 2.5),
+                      );
+                    }
+                    final notifications = snapshot.data ?? <Map<String, dynamic>>[];
+                    if (snapshot.hasError || notifications.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(18),
+                              decoration: BoxDecoration(
+                                color: AppTheme.surfaceHover,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: AppTheme.border),
+                              ),
+                              child: const Icon(
+                                Icons.notifications_none_rounded,
+                                size: 32,
+                                color: AppTheme.textMuted,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            Text(
+                              'All caught up',
+                              style: GoogleFonts.outfit(
+                                color: AppTheme.textPrimary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'There are no unread notifications right now.',
+                              style: GoogleFonts.inter(
+                                color: AppTheme.textMuted,
+                                fontSize: 12.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return ListView.separated(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: notifications.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final notif = notifications[index];
+                        final notifId = notif['id']?.toString() ?? '';
+                        final route = notif['route']?.toString();
+                        final type = notif['type']?.toString();
+                        final badgeColor = _colorForNotifType(type);
+                        final rawTitle = (notif['title'] ?? 'System Alert').toString();
+                        final cleanTitle = _cleanNotificationTitle(rawTitle);
+
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () async {
+                            try {
+                              await NotificationService().markDismissed(notifId);
+                              if (int.tryParse(notifId) != null) {
+                                await ApiService().post('/notifications/$notifId/read');
+                              }
+                            } catch (_) {}
+                            if (context.mounted) {
+                              Navigator.pop(context);
+                              if (route != null && route.isNotEmpty) {
+                                context.go(route);
+                              } else {
+                                _showNotifications(context);
+                              }
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surfaceHover,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: AppTheme.border),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Container(
-                                  padding: const EdgeInsets.all(20),
+                                  padding: const EdgeInsets.all(9),
                                   decoration: BoxDecoration(
-                                    color: AppTheme.surfaceHover,
+                                    color: badgeColor.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    _iconForNotifType(type),
+                                    color: badgeColor,
+                                    size: 18,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        cleanTitle.isEmpty ? rawTitle : cleanTitle,
+                                        style: GoogleFonts.outfit(
+                                          color: AppTheme.textPrimary,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        notif['message'] ?? '',
+                                        style: GoogleFonts.inter(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 12.5,
+                                          height: 1.35,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  width: 7,
+                                  height: 7,
+                                  margin: const EdgeInsets.only(top: 5),
+                                  decoration: BoxDecoration(
+                                    color: badgeColor,
                                     shape: BoxShape.circle,
-                                    border: Border.all(color: AppTheme.border),
-                                  ),
-                                  child: const Icon(
-                                    Icons.notifications_off_outlined,
-                                    size: 36,
-                                    color: AppTheme.textMuted,
-                                  ),
-                                ),
-                                const SizedBox(height: 14),
-                                Text(
-                                  'All caught up!',
-                                  style: GoogleFonts.outfit(
-                                    color: AppTheme.textPrimary,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'No unread notifications at the moment.',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.textMuted,
-                                    fontSize: 13,
                                   ),
                                 ),
                               ],
                             ),
-                          );
-                        }
-
-                        return ListView.separated(
-                          padding: const EdgeInsets.all(18),
-                          itemCount: notifications.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final notif = notifications[index] as Map<String, dynamic>;
-                            return InkWell(
-                              borderRadius: BorderRadius.circular(18),
-                              onTap: () async {
-                                try {
-                                  await ApiService().post('/notifications/${notif['id']}/read');
-                                  if (context.mounted) {
-                                    Navigator.pop(context);
-                                    _showNotifications(context);
-                                  }
-                                } catch (_) {}
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: AppTheme.glassCardDecoration(borderRadius: 18),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.primary.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: const Icon(Icons.bolt_rounded, color: AppTheme.primary, size: 20),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            notif['title'] ?? 'System Alert',
-                                            style: GoogleFonts.outfit(
-                                              color: AppTheme.textPrimary,
-                                              fontWeight: FontWeight.w700,
-                                              fontSize: 14.5,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            notif['message'] ?? '',
-                                            style: GoogleFonts.plusJakartaSans(
-                                              color: AppTheme.textSecondary,
-                                              fontSize: 12.5,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      margin: const EdgeInsets.only(top: 4),
-                                      decoration: const BoxDecoration(
-                                        color: AppTheme.accent,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
+                          ),
                         );
                       },
-                    ),
-                  ),
-                ],
+                    );
+                  },
+                ),
               ),
-            ),
+            ],
           ),
         );
       },
@@ -636,169 +768,143 @@ class _MainShellState extends ConsumerState<MainShell> {
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(22, 12, 22, 30),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xF5111F2E),
-                    Color(0xFA060B10),
-                  ],
-                ),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-                border: Border.all(
-                  color: AppTheme.accent.withValues(alpha: 0.3),
-                  width: 1.2,
+        return Container(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            10,
+            20,
+            MediaQuery.of(context).padding.bottom + 24,
+          ),
+          decoration: const BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border(
+              top: BorderSide(color: AppTheme.borderLight, width: 1),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppTheme.borderLight,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(height: 16),
+              Row(
                 children: [
-                  Center(
-                    child: Container(
-                      width: 44,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: AppTheme.accent.withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
+                  Container(
+                    padding: const EdgeInsets.all(9),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppTheme.primary.withValues(alpha: 0.25)),
                     ),
+                    child: const Icon(Icons.grid_view_rounded, color: AppTheme.primary, size: 19),
                   ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(9),
-                        decoration: BoxDecoration(
-                          color: AppTheme.accent.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppTheme.accent.withValues(alpha: 0.35)),
-                        ),
-                        child: const Icon(Icons.widgets_rounded, color: AppTheme.accent, size: 20),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Enterprise Modules',
-                              style: GoogleFonts.outfit(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.textPrimary,
-                              ),
-                            ),
-                            Text(
-                              'Quick access to all workspace tools',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 12,
-                                color: AppTheme.textMuted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
-                      mainAxisSpacing: 14,
-                      crossAxisSpacing: 14,
-                      childAspectRatio: 0.98,
-                    ),
-                    itemCount: overflowItems.length,
-                    itemBuilder: (context, index) {
-                      final item = overflowItems[index];
-                      final isGoldAccent = index % 2 == 1;
-                      final accentColor = isGoldAccent ? AppTheme.accent : AppTheme.primary;
-
-                      return InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () {
-                          Navigator.pop(context);
-                          context.go(item.path);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                const Color(0xFF12202F),
-                                const Color(0xFF0B141E),
-                              ],
-                            ),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: accentColor.withValues(alpha: 0.28),
-                              width: 1,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 6),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(11),
-                                decoration: BoxDecoration(
-                                  color: accentColor.withValues(alpha: 0.14),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: accentColor.withValues(alpha: 0.35),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Icon(
-                                  item.activeIcon,
-                                  color: accentColor,
-                                  size: 22,
-                                ),
-                              ),
-                              const SizedBox(height: 9),
-                              Text(
-                                item.label,
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppTheme.textPrimary,
-                                  height: 1.15,
-                                ),
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Workspace Modules',
+                          style: GoogleFonts.outfit(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary,
                           ),
                         ),
-                      );
-                    },
+                        Text(
+                          'Direct access to management tools',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary, size: 20),
                   ),
                 ],
               ),
-            ),
+              const SizedBox(height: 16),
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  mainAxisExtent: 62,
+                ),
+                itemCount: overflowItems.length,
+                itemBuilder: (context, index) {
+                  final item = overflowItems[index];
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      Navigator.pop(context);
+                      context.go(item.path);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceHover,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppTheme.border, width: 1),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            alignment: Alignment.center,
+                            child: Icon(
+                              item.activeIcon,
+                              color: AppTheme.primary,
+                              size: 18,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              item.label,
+                              style: GoogleFonts.inter(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textPrimary,
+                                height: 1.2,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            size: 16,
+                            color: AppTheme.textMuted,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
         );
       },
@@ -807,9 +913,9 @@ class _MainShellState extends ConsumerState<MainShell> {
 
   Widget _buildSidebar(String location, String? role) {
     return Container(
-      width: 268,
+      width: 260,
       decoration: const BoxDecoration(
-        color: Color(0xCC081018),
+        color: AppTheme.surface,
         border: Border(
           right: BorderSide(color: AppTheme.border, width: 1),
         ),
@@ -828,46 +934,39 @@ class _MainShellState extends ConsumerState<MainShell> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Brand Header
         Padding(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(22.0),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(9),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [AppTheme.primary, AppTheme.accent]),
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppTheme.primary.withValues(alpha: 0.35),
-                      blurRadius: 14,
-                      offset: const Offset(0, 4),
-                    )
-                  ],
+                  color: AppTheme.primary.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
                 ),
-                child: const Icon(Icons.apartment_rounded, color: Color(0xFF04130F), size: 24),
+                child: const Icon(Icons.apartment_rounded, color: AppTheme.primary, size: 22),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     'SOCIMCO',
                     style: GoogleFonts.outfit(
-                      fontSize: 19,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
                       color: AppTheme.textPrimary,
-                      letterSpacing: 0.8,
+                      letterSpacing: 0.5,
                     ),
                   ),
                   Text(
-                    'LUXURY PMS SUITE',
-                    style: GoogleFonts.plusJakartaSans(
+                    'ENTERPRISE PMS',
+                    style: GoogleFonts.inter(
                       fontSize: 9.5,
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.accent,
-                      letterSpacing: 1.2,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textMuted,
+                      letterSpacing: 1.0,
                     ),
                   ),
                 ],
@@ -875,21 +974,21 @@ class _MainShellState extends ConsumerState<MainShell> {
             ],
           ),
         ),
-
-        // Navigation Items
+        const Divider(color: AppTheme.border, height: 1),
+        const SizedBox(height: 12),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
             children: [
               Padding(
-                padding: const EdgeInsets.only(left: 8, bottom: 10),
+                padding: const EdgeInsets.only(left: 10, bottom: 8),
                 child: Text(
-                  'WORKSPACE MODULES',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
+                  'MODULES',
+                  style: GoogleFonts.inter(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
                     color: AppTheme.textMuted,
-                    letterSpacing: 1.4,
+                    letterSpacing: 1.2,
                   ),
                 ),
               ),
@@ -901,31 +1000,33 @@ class _MainShellState extends ConsumerState<MainShell> {
             ],
           ),
         ),
-
-        // User Footer
         Container(
-          margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(14),
-          decoration: AppTheme.glassCardDecoration(borderRadius: 18),
+          margin: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceHover,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.border),
+          ),
           child: Row(
             children: [
               Container(
-                width: 38,
-                height: 38,
-                decoration: const BoxDecoration(
-                  gradient: AppTheme.primaryGradient,
-                  shape: BoxShape.circle,
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 alignment: Alignment.center,
                 child: Text(
                   (user?.name.isNotEmpty == true ? user!.name : 'U')[0].toUpperCase(),
                   style: GoogleFonts.outfit(
-                    color: const Color(0xFF04130F),
-                    fontWeight: FontWeight.w800,
+                    color: AppTheme.primary,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -934,25 +1035,25 @@ class _MainShellState extends ConsumerState<MainShell> {
                       user?.name ?? 'User',
                       style: GoogleFonts.outfit(
                         color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.5,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
-                      (user?.role ?? 'Role').toUpperCase(),
-                      style: GoogleFonts.plusJakartaSans(
-                        color: AppTheme.accent,
+                      User.normalizeRole(user?.role).toUpperCase(),
+                      style: GoogleFonts.inter(
+                        color: AppTheme.textMuted,
                         fontSize: 10,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.logout_rounded, color: AppTheme.danger, size: 20),
-                onPressed: () => ref.read(authProvider.notifier).logout(),
+                icon: const Icon(Icons.logout_rounded, color: AppTheme.danger, size: 18),
+                onPressed: () => _confirmLogout(context),
               ),
             ],
           ),
@@ -963,29 +1064,23 @@ class _MainShellState extends ConsumerState<MainShell> {
 
   Widget _buildSidebarNavItem(SmartNavItem item, bool isSelected) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
+      margin: const EdgeInsets.only(bottom: 4),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           onTap: () => context.go(item.path),
           hoverColor: AppTheme.surfaceHover,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 220),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              gradient: isSelected
-                  ? LinearGradient(
-                      colors: [
-                        AppTheme.primary.withValues(alpha: 0.2),
-                        AppTheme.primary.withValues(alpha: 0.05),
-                      ],
-                    )
-                  : null,
+              borderRadius: BorderRadius.circular(12),
+              color: isSelected
+                  ? AppTheme.primary.withValues(alpha: 0.12)
+                  : Colors.transparent,
               border: Border.all(
                 color: isSelected
-                    ? AppTheme.primary.withValues(alpha: 0.45)
+                    ? AppTheme.primary.withValues(alpha: 0.3)
                     : Colors.transparent,
               ),
             ),
@@ -993,30 +1088,21 @@ class _MainShellState extends ConsumerState<MainShell> {
               children: [
                 Icon(
                   isSelected ? item.activeIcon : item.icon,
-                  size: 20,
+                  size: 19,
                   color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     item.label,
-                    style: GoogleFonts.plusJakartaSans(
+                    style: GoogleFonts.inter(
                       color: isSelected ? AppTheme.textPrimary : AppTheme.textSecondary,
-                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                      fontSize: 13.5,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                      fontSize: 13,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (isSelected)
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: const BoxDecoration(
-                      color: AppTheme.primary,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
               ],
             ),
           ),

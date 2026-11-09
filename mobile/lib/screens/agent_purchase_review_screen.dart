@@ -5,24 +5,45 @@ import 'package:intl/intl.dart';
 import '../config/app_theme.dart';
 import '../services/api_service.dart';
 import '../widgets/mobile/enterprise_mobile_scaffold.dart';
+import '../widgets/mobile/receipt_image_viewer.dart';
 
 /// Fetches and merges agent purchase submissions & apartment cost deployments
 /// from all backend tables so both Pending Review and All History are complete.
 final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  Future<dynamic> safeFetch(Future<dynamic> future, Duration timeout) async {
+    try {
+      final res = await future.timeout(timeout);
+      return res.data;
+    } catch (_) {
+      return null;
+    }
+  }
+
   final results = await Future.wait([
-    ApiService().get('/agent-purchases?all=1').catchError((_) => ApiService().get('/agent-purchases')),
-    ApiService().get('/energy/agent/apartment-purchases/pending').catchError((_) => throw Exception('skip')),
-    ApiService().get('/energy/agent/apartment-purchases').catchError((_) => throw Exception('skip')),
-    ApiService()
-        .get('/apartment-costs/report', queryParameters: {
-          'start_date': '2020-01-01',
-          'end_date': '2030-12-31',
-        })
-        .catchError((_) => throw Exception('skip')),
-  ].map((f) => f.then<dynamic>((r) => r.data).catchError((_) => null)));
+    safeFetch(
+      ApiService().get('/agent-purchases?all=1').catchError((_) => ApiService().get('/agent-purchases')),
+      const Duration(seconds: 5),
+    ),
+    safeFetch(
+      ApiService().get('/energy/agent/apartment-purchases/pending'),
+      const Duration(seconds: 4),
+    ),
+    safeFetch(
+      ApiService().get('/energy/agent/apartment-purchases'),
+      const Duration(seconds: 4),
+    ),
+    safeFetch(
+      ApiService().get('/apartment-costs/report', queryParameters: {
+        'start_date': '2020-01-01',
+        'end_date': '2030-12-31',
+      }),
+      const Duration(seconds: 3),
+    ),
+  ]);
 
   final List<Map<String, dynamic>> merged = [];
   final Set<String> seenKeys = {};
+  final Map<String, int> sigToIndex = {};
 
   double parseAmount(dynamic raw) {
     if (raw == null) return 0;
@@ -39,39 +60,24 @@ final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
     return 'Approved';
   }
 
-  // 1. From /agent-purchases?all=1
-  if (results[0] is List) {
-    for (final raw in (results[0] as List)) {
-      if (raw is! Map) continue;
-      final item = Map<String, dynamic>.from(raw);
-      final bld = (item['building_name'] ?? 'Galaxy').toString();
-      final apt = (item['apartment_number'] ?? item['apartment_code'] ?? 'A1').toString();
-      final supplier = (item['supplier'] ?? item['supplier_name'] ?? 'General').toString();
-      final numAmt = parseAmount(item['amount']);
-      final dateStr = (item['created_at'] ?? item['date'] ?? '').toString();
-      final key = 'ap_${item['id']}_${bld}_${apt}_$numAmt';
-      seenKeys.add(key);
-
-      merged.add({
-        'id': item['id'],
-        'source_table': 'agent_purchases',
-        'source_type': 'Agent Purchase',
-        'building_name': bld,
-        'apartment_number': apt,
-        'supplier': supplier,
-        'amount_num': numAmt,
-        'amount': 'CFA ${NumberFormat('#,##0').format(numAmt)}',
-        'items': (item['items'] ?? 'General Material').toString(),
-        'notes': (item['notes'] ?? '').toString(),
-        'status': normalizeStatus(item['status'] ?? 'Pending Review'),
-        'submitter_name': (item['submitter_name'] ?? 'Field Agent').toString(),
-        'date': dateStr.isNotEmpty ? dateStr.split(' ').first : '',
-        'receipt_image': item['receipt_image'],
-      });
+  String? extractReceipt(Map<String, dynamic> item) {
+    final direct = item['receipt_image'] ?? item['receipt_path'] ?? item['photo_path'];
+    if (direct != null && direct.toString().trim().isNotEmpty) {
+      return direct.toString().trim();
     }
+    final receipts = item['receipts'];
+    if (receipts is List && receipts.isNotEmpty) {
+      final first = receipts.first?.toString().trim() ?? '';
+      if (first.isNotEmpty) return first;
+    }
+    return null;
   }
 
-  // 2. From /energy/agent/apartment-purchases/pending
+  String buildSig(String bld, String apt, String sup, double amt, String date) {
+    return '${bld.trim().toLowerCase()}_${apt.trim().toLowerCase()}_${sup.trim().toLowerCase()}_${amt.round()}_$date';
+  }
+
+  // 1. Primary: From /energy/agent/apartment-purchases/pending (apartment_cost_deployments with receipt_image)
   if (results[1] is List) {
     for (final raw in (results[1] as List)) {
       if (raw is! Map) continue;
@@ -83,6 +89,10 @@ final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
       final dedup = 'acd_${item['id']}';
       if (seenKeys.contains(dedup)) continue;
       seenKeys.add(dedup);
+
+      final dateOnly = (item['date'] ?? item['created_at'] ?? '').toString().split(' ').first;
+      final sig = buildSig(bld, apt, supplier, numAmt, dateOnly);
+      sigToIndex[sig] = merged.length;
 
       merged.add({
         'id': item['id'],
@@ -97,13 +107,13 @@ final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
         'notes': (item['notes'] ?? '').toString(),
         'status': 'Pending Review',
         'submitter_name': (item['submitter_name'] ?? 'Field Agent').toString(),
-        'date': (item['date'] ?? item['created_at'] ?? '').toString().split(' ').first,
-        'receipt_image': item['receipt_image'],
+        'date': dateOnly,
+        'receipt_image': extractReceipt(item),
       });
     }
   }
 
-  // 3. From /energy/agent/apartment-purchases (history)
+  // 2. Primary History: From /energy/agent/apartment-purchases (history with receipt_image)
   final histList = (results[2] is Map && results[2]['history'] is List)
       ? (results[2]['history'] as List)
       : (results[2] is List ? results[2] as List : const []);
@@ -118,6 +128,9 @@ final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
     final apt = (item['apartment_code'] ?? item['apartment_number'] ?? '').toString();
     final supplier = (item['supplier_name'] ?? item['supplier'] ?? 'Supplier').toString();
     final numAmt = parseAmount(item['amount']);
+    final dateOnly = (item['date'] ?? item['created_at'] ?? '').toString().split(' ').first;
+    final sig = buildSig(bld, apt, supplier, numAmt, dateOnly);
+    sigToIndex[sig] = merged.length;
 
     merged.add({
       'id': item['id'],
@@ -132,9 +145,57 @@ final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
       'notes': (item['notes'] ?? '').toString(),
       'status': normalizeStatus(item['status'] ?? 'Approved'),
       'submitter_name': (item['submitter_name'] ?? 'Field Agent').toString(),
-      'date': (item['date'] ?? item['created_at'] ?? '').toString().split(' ').first,
-      'receipt_image': item['receipt_image'],
+      'date': dateOnly,
+      'receipt_image': extractReceipt(item),
     });
+  }
+
+  // 3. Secondary: From /agent-purchases?all=1 (deduplicated against apartment_cost_deployments)
+  if (results[0] is List) {
+    for (final raw in (results[0] as List)) {
+      if (raw is! Map) continue;
+      final item = Map<String, dynamic>.from(raw);
+      final bld = (item['building_name'] ?? 'Galaxy').toString();
+      final apt = (item['apartment_number'] ?? item['apartment_code'] ?? 'A1').toString();
+      final supplier = (item['supplier'] ?? item['supplier_name'] ?? 'General').toString();
+      final numAmt = parseAmount(item['amount']);
+      final dateStr = (item['created_at'] ?? item['date'] ?? '').toString();
+      final dateOnly = dateStr.isNotEmpty ? dateStr.split(' ').first : '';
+      final receipt = extractReceipt(item);
+
+      final sig = buildSig(bld, apt, supplier, numAmt, dateOnly);
+      if (sigToIndex.containsKey(sig)) {
+        final idx = sigToIndex[sig]!;
+        if ((merged[idx]['receipt_image'] == null ||
+                merged[idx]['receipt_image'].toString().isEmpty) &&
+            receipt != null) {
+          merged[idx]['receipt_image'] = receipt;
+        }
+        continue;
+      }
+
+      final key = 'ap_${item['id']}_${bld}_${apt}_$numAmt';
+      if (seenKeys.contains(key)) continue;
+      seenKeys.add(key);
+      sigToIndex[sig] = merged.length;
+
+      merged.add({
+        'id': item['id'],
+        'source_table': 'agent_purchases',
+        'source_type': 'Agent Purchase',
+        'building_name': bld,
+        'apartment_number': apt,
+        'supplier': supplier,
+        'amount_num': numAmt,
+        'amount': 'CFA ${NumberFormat('#,##0').format(numAmt)}',
+        'items': (item['items'] ?? 'General Material').toString(),
+        'notes': (item['notes'] ?? '').toString(),
+        'status': normalizeStatus(item['status'] ?? 'Pending Review'),
+        'submitter_name': (item['submitter_name'] ?? 'Field Agent').toString(),
+        'date': dateOnly,
+        'receipt_image': receipt,
+      });
+    }
   }
 
   // 4. From /apartment-costs/report (all apartment expenses/deployments)
@@ -157,6 +218,19 @@ final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
       final supplier = (item['supplier_name'] ?? 'Supplier').toString();
       final numAmt = parseAmount(item['amount']);
       final type = (item['type'] ?? 'Deployment').toString();
+      final dateOnly = (item['date'] ?? '').toString().split(' ').first;
+      final receipt = extractReceipt(item);
+
+      final sig = buildSig(bld, apt, supplier, numAmt, dateOnly);
+      if (sigToIndex.containsKey(sig)) {
+        final idx = sigToIndex[sig]!;
+        if ((merged[idx]['receipt_image'] == null ||
+                merged[idx]['receipt_image'].toString().isEmpty) &&
+            receipt != null) {
+          merged[idx]['receipt_image'] = receipt;
+        }
+        continue;
+      }
 
       merged.add({
         'id': item['id'],
@@ -171,8 +245,8 @@ final agentPurchasesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
         'notes': (item['notes'] ?? '').toString(),
         'status': 'Approved',
         'submitter_name': type,
-        'date': (item['date'] ?? '').toString().split(' ').first,
-        'receipt_image': item['receipt_image'],
+        'date': dateOnly,
+        'receipt_image': receipt,
       });
     }
   }
@@ -297,304 +371,314 @@ class _AgentPurchaseReviewScreenState extends ConsumerState<AgentPurchaseReviewS
   @override
   Widget build(BuildContext context) {
     final purchasesAsync = ref.watch(agentPurchasesProvider);
+    final isLoading = purchasesAsync.isLoading && !purchasesAsync.hasValue;
+    final allItems = purchasesAsync.value ?? const <Map<String, dynamic>>[];
+
+    // Extract unique buildings for filter dropdown
+    final buildingsSet = <String>{'All Buildings'};
+    for (final p in allItems) {
+      final b = (p['building_name'] ?? '').toString().trim();
+      if (b.isNotEmpty) buildingsSet.add(b);
+    }
+    final buildingOptions = buildingsSet.toList();
+    if (!buildingOptions.contains(_selectedBuilding)) {
+      _selectedBuilding = 'All Buildings';
+    }
+
+    final pendingFiltered = _applyFilters(allItems, isPendingTab: true);
+    final historyFiltered = _applyFilters(allItems, isPendingTab: false);
+
+    final totalHistoryAmount = historyFiltered.fold<double>(
+      0,
+      (sum, item) => sum + ((item['amount_num'] as num?)?.toDouble() ?? 0),
+    );
 
     return EnterpriseMobileScaffold(
       title: 'Agent Purchase Review',
       userRole: 'Admin',
       userName: 'Administrator',
       currentTabIndex: 0,
-      body: purchasesAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator(color: AppTheme.primary)),
-        error: (err, _) => Center(
-          child: Text('Error loading purchases: $err', style: const TextStyle(color: AppTheme.danger)),
-        ),
-        data: (allItems) {
-          // Extract unique buildings for filter dropdown
-          final buildingsSet = <String>{'All Buildings'};
-          for (final p in allItems) {
-            final b = (p['building_name'] ?? '').toString().trim();
-            if (b.isNotEmpty) buildingsSet.add(b);
-          }
-          final buildingOptions = buildingsSet.toList();
-          if (!buildingOptions.contains(_selectedBuilding)) {
-            _selectedBuilding = 'All Buildings';
-          }
-
-          final pendingFiltered = _applyFilters(allItems, isPendingTab: true);
-          final historyFiltered = _applyFilters(allItems, isPendingTab: false);
-
-          final totalHistoryAmount = historyFiltered.fold<double>(
-            0,
-            (sum, item) => sum + ((item['amount_num'] as num?)?.toDouble() ?? 0),
-          );
-
-          return Column(
-            children: [
-              // ── Header + Search + Filters Panel ───────────────────────────
-              Container(
-                margin: const EdgeInsets.fromLTRB(16, 6, 16, 8),
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-                decoration: AppTheme.glassCardDecoration(borderRadius: 22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+      body: Column(
+        children: [
+          // ── Header + Search + Filters Panel (Always rendered in 0ms) ──
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            decoration: AppTheme.glassCardDecoration(borderRadius: 22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accent.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppTheme.accent.withValues(alpha: 0.35)),
+                          ),
+                          child: const Icon(Icons.shopping_cart_checkout_rounded, color: AppTheme.accent, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppTheme.accent.withValues(alpha: 0.16),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: AppTheme.accent.withValues(alpha: 0.35)),
+                            Text(
+                              'Purchase & Cost Center',
+                              style: GoogleFonts.outfit(
+                                color: AppTheme.textPrimary,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
                               ),
-                              child: const Icon(Icons.shopping_cart_checkout_rounded, color: AppTheme.accent, size: 20),
                             ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Purchase & Cost Center',
-                                  style: GoogleFonts.outfit(
-                                    color: AppTheme.textPrimary,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                Text(
-                                  '${historyFiltered.length} records • CFA ${NumberFormat('#,##0').format(totalHistoryAmount)}',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.primary,
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
+                            Text(
+                              isLoading
+                                  ? 'Syncing latest records...'
+                                  : '${historyFiltered.length} records • CFA ${NumberFormat('#,##0').format(totalHistoryAmount)}',
+                              style: GoogleFonts.plusJakartaSans(
+                                color: AppTheme.primary,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ],
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.refresh_rounded, color: AppTheme.primary, size: 22),
-                          onPressed: () {
-                            ApiService().clearCache();
-                            ref.invalidate(agentPurchasesProvider);
-                          },
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-
-                    // Search Field
-                    SizedBox(
-                      height: 42,
-                      child: TextField(
-                        controller: _searchController,
-                        onChanged: (v) => setState(() => _searchQuery = v.trim()),
-                        style: GoogleFonts.plusJakartaSans(color: AppTheme.textPrimary, fontSize: 13),
-                        decoration: InputDecoration(
-                          hintText: 'Search building, apt, supplier, item or agent...',
-                          hintStyle: GoogleFonts.plusJakartaSans(color: AppTheme.textMuted, fontSize: 12),
-                          prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.primary, size: 18),
-                          suffixIcon: _searchQuery.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.close_rounded, size: 16, color: AppTheme.textSecondary),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    setState(() => _searchQuery = '');
-                                  },
-                                )
-                              : null,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                          filled: true,
-                          fillColor: AppTheme.background,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(13),
-                            borderSide: const BorderSide(color: AppTheme.border),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(13),
-                            borderSide: const BorderSide(color: AppTheme.border),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-
-                    // Filter Chips Row (Building + Status + Date Range)
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          // Building Dropdown Pill
-                          Container(
-                            height: 32,
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            decoration: BoxDecoration(
-                              color: _selectedBuilding != 'All Buildings'
-                                  ? AppTheme.primary.withValues(alpha: 0.16)
-                                  : AppTheme.background,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: _selectedBuilding != 'All Buildings'
-                                    ? AppTheme.primary
-                                    : AppTheme.border,
-                              ),
-                            ),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String>(
-                                value: _selectedBuilding,
-                                dropdownColor: AppTheme.surface,
-                                icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: AppTheme.primary),
-                                style: GoogleFonts.plusJakartaSans(
-                                  color: AppTheme.textPrimary,
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                                items: buildingOptions
-                                    .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                                    .toList(),
-                                onChanged: (val) {
-                                  if (val != null) setState(() => _selectedBuilding = val);
-                                },
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-
-                          // Date Range Filter Chips
-                          for (final range in ['All Time', 'This Month', 'Last 30 Days']) ...[
-                            _buildFilterChip(
-                              label: range,
-                              selected: _selectedDateRange == range,
-                              onTap: () => setState(() => _selectedDateRange = range),
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-
-                          // Status Filter Chips
-                          for (final st in ['All', 'Approved', 'Pending Review', 'Rejected']) ...[
-                            _buildFilterChip(
-                              label: st == 'Pending Review' ? 'Pending' : st,
-                              selected: _selectedStatus == st,
-                              accentColor: AppTheme.accent,
-                              onTap: () => setState(() => _selectedStatus = st),
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-
-                    // Tabs
-                    TabBar(
-                      controller: _tabController,
-                      indicatorColor: AppTheme.accent,
-                      labelColor: AppTheme.accent,
-                      unselectedLabelColor: AppTheme.textSecondary,
-                      dividerColor: AppTheme.border,
-                      labelStyle: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 13.5),
-                      tabs: [
-                        Tab(text: 'Pending Review (${pendingFiltered.length})'),
-                        Tab(text: 'All History (${historyFiltered.length})'),
-                      ],
+                    IconButton(
+                      icon: const Icon(Icons.refresh_rounded, color: AppTheme.primary, size: 22),
+                      onPressed: () {
+                        ApiService().clearCache();
+                        ref.invalidate(agentPurchasesProvider);
+                      },
                     ),
                   ],
                 ),
-              ),
+                const SizedBox(height: 12),
 
-              // ── Tab Views ─────────────────────────────────────────────────
-              Expanded(
-                child: TabBarView(
+                // Search Field
+                SizedBox(
+                  height: 42,
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                    style: GoogleFonts.plusJakartaSans(color: AppTheme.textPrimary, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Search building, apt, supplier, item or agent...',
+                      hintStyle: GoogleFonts.plusJakartaSans(color: AppTheme.textMuted, fontSize: 12),
+                      prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.primary, size: 18),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.close_rounded, size: 16, color: AppTheme.textSecondary),
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchQuery = '');
+                              },
+                            )
+                          : null,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                      filled: true,
+                      fillColor: AppTheme.background,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(13),
+                        borderSide: const BorderSide(color: AppTheme.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(13),
+                        borderSide: const BorderSide(color: AppTheme.border),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Filter Chips Row (Building + Status + Date Range)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      // Building Dropdown Pill
+                      Container(
+                        height: 32,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        decoration: BoxDecoration(
+                          color: _selectedBuilding != 'All Buildings'
+                              ? AppTheme.primary.withValues(alpha: 0.16)
+                              : AppTheme.background,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: _selectedBuilding != 'All Buildings'
+                                ? AppTheme.primary
+                                : AppTheme.border,
+                          ),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: _selectedBuilding,
+                            dropdownColor: AppTheme.surface,
+                            icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: AppTheme.primary),
+                            style: GoogleFonts.plusJakartaSans(
+                              color: AppTheme.textPrimary,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            items: buildingOptions
+                                .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                                .toList(),
+                            onChanged: (val) {
+                              if (val != null) setState(() => _selectedBuilding = val);
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+
+                      // Date Range Filter Chips
+                      for (final range in ['All Time', 'This Month', 'Last 30 Days']) ...[
+                        _buildFilterChip(
+                          label: range,
+                          selected: _selectedDateRange == range,
+                          onTap: () => setState(() => _selectedDateRange = range),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+
+                      // Status Filter Chips
+                      for (final st in ['All', 'Approved', 'Pending Review', 'Rejected']) ...[
+                        _buildFilterChip(
+                          label: st == 'Pending Review' ? 'Pending' : st,
+                          selected: _selectedStatus == st,
+                          accentColor: AppTheme.accent,
+                          onTap: () => setState(() => _selectedStatus = st),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Tabs
+                TabBar(
                   controller: _tabController,
-                  children: [
-                    // Tab 1: Pending Review
-                    pendingFiltered.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(18),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.primary.withValues(alpha: 0.12),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(Icons.verified_rounded, size: 42, color: AppTheme.primary),
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  'No Pending Purchases — All Clear!',
-                                  style: GoogleFonts.outfit(
-                                    color: AppTheme.textPrimary,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Switch to "All History" to browse ${historyFiltered.length} recorded costs.',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                            itemCount: pendingFiltered.length,
-                            itemBuilder: (context, index) =>
-                                _buildPurchaseCard(pendingFiltered[index], showActions: true),
-                          ),
-
-                    // Tab 2: All History
-                    historyFiltered.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.search_off_rounded, size: 42, color: AppTheme.textMuted),
-                                const SizedBox(height: 10),
-                                Text(
-                                  'No purchases match the active filter.',
-                                  style: GoogleFonts.outfit(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                TextButton(
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    setState(() {
-                                      _searchQuery = '';
-                                      _selectedBuilding = 'All Buildings';
-                                      _selectedStatus = 'All';
-                                      _selectedDateRange = 'All Time';
-                                    });
-                                  },
-                                  child: const Text('Reset Filters', style: TextStyle(color: AppTheme.primary)),
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                            itemCount: historyFiltered.length,
-                            itemBuilder: (context, index) =>
-                                _buildPurchaseCard(historyFiltered[index], showActions: false),
-                          ),
+                  indicatorColor: AppTheme.accent,
+                  labelColor: AppTheme.accent,
+                  unselectedLabelColor: AppTheme.textSecondary,
+                  dividerColor: AppTheme.border,
+                  labelStyle: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 13.5),
+                  tabs: [
+                    Tab(text: 'Pending Review (${pendingFiltered.length})'),
+                    Tab(text: 'All History (${historyFiltered.length})'),
                   ],
                 ),
-              ),
-            ],
-          );
-        },
+              ],
+            ),
+          ),
+
+          // ── Tab Views ─────────────────────────────────────────────────
+          Expanded(
+            child: isLoading
+                ? ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                    itemCount: 3,
+                    itemBuilder: (_, __) => Container(
+                      height: 112,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surface,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                    ),
+                  )
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      // Tab 1: Pending Review
+                      pendingFiltered.isEmpty
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(18),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primary.withValues(alpha: 0.12),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.verified_rounded, size: 42, color: AppTheme.primary),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    'No Pending Purchases — All Clear!',
+                                    style: GoogleFonts.outfit(
+                                      color: AppTheme.textPrimary,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Switch to "All History" to browse ${historyFiltered.length} recorded costs.',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      color: AppTheme.textSecondary,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                              itemCount: pendingFiltered.length,
+                              itemBuilder: (context, index) =>
+                                  _buildPurchaseCard(pendingFiltered[index], showActions: true),
+                            ),
+
+                      // Tab 2: All History
+                      historyFiltered.isEmpty
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.search_off_rounded, size: 42, color: AppTheme.textMuted),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'No purchases match the active filter.',
+                                    style: GoogleFonts.outfit(
+                                      color: AppTheme.textSecondary,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      setState(() {
+                                        _searchQuery = '';
+                                        _selectedBuilding = 'All Buildings';
+                                        _selectedStatus = 'All';
+                                        _selectedDateRange = 'All Time';
+                                      });
+                                    },
+                                    child: const Text('Reset Filters', style: TextStyle(color: AppTheme.primary)),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                              itemCount: historyFiltered.length,
+                              itemBuilder: (context, index) =>
+                                  _buildPurchaseCard(historyFiltered[index], showActions: false),
+                            ),
+                    ],
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -638,6 +722,7 @@ class _AgentPurchaseReviewScreenState extends ConsumerState<AgentPurchaseReviewS
     final date = item['date'] ?? '';
     final status = (item['status'] ?? 'Approved').toString();
     final sourceType = (item['source_type'] ?? 'Purchase').toString();
+    final receiptImg = (item['receipt_image'] ?? '').toString().trim();
 
     final Color statusColor = status == 'Approved'
         ? AppTheme.primary
@@ -742,6 +827,76 @@ class _AgentPurchaseReviewScreenState extends ConsumerState<AgentPurchaseReviewS
                 ),
             ],
           ),
+          if (receiptImg.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            InkWell(
+              onTap: () => ReceiptImageViewer.showLightbox(
+                context,
+                receiptImg,
+                title: '$building • Apt $apt Receipt',
+                subtitle: 'Supplier: $supplier • $amount • By: $submitter',
+              ),
+              borderRadius: BorderRadius.circular(13),
+              child: Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: AppTheme.background,
+                  borderRadius: BorderRadius.circular(13),
+                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(9),
+                      child: SizedBox(
+                        width: 60,
+                        height: 60,
+                        child: ReceiptImageViewer.buildImage(receiptImg, width: 60, height: 60),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.verified_outlined, color: AppTheme.primary, size: 15),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Receipt Photo Attached',
+                                style: GoogleFonts.outfit(
+                                  color: AppTheme.primary,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Tap to inspect full-size receipt photo',
+                            style: GoogleFonts.plusJakartaSans(
+                              color: AppTheme.textSecondary,
+                              fontSize: 11.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primary.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: const Icon(Icons.zoom_in_rounded, color: AppTheme.primary, size: 20),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           if (showActions || status == 'Pending Review') ...[
             const SizedBox(height: 12),
             Row(

@@ -129,10 +129,10 @@ class _EnergyVerificationScreenState extends ConsumerState<EnergyVerificationScr
             children: [
               // Header title & module tab strip
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 decoration: const BoxDecoration(
-                  color: Color(0xFF131722),
-                  border: Border(bottom: BorderSide(color: Color(0xFF0D1620))),
+                  color: AppTheme.surface,
+                  border: Border(bottom: BorderSide(color: AppTheme.border)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -140,36 +140,52 @@ class _EnergyVerificationScreenState extends ConsumerState<EnergyVerificationScr
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Enterprise Verification',
-                          style: GoogleFonts.outfit(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Readings Verification',
+                                style: GoogleFonts.outfit(
+                                  color: AppTheme.textPrimary,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Anomaly detection and meter approval queue',
+                                style: GoogleFonts.inter(
+                                  color: AppTheme.textMuted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.refresh, color: AppTheme.primary, size: 20),
+                          icon: const Icon(Icons.refresh_rounded, color: AppTheme.primary, size: 20),
                           onPressed: () => _refreshData(),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Smart anomaly detection and bulk approval workflows.',
-                      style: GoogleFonts.inter(color: Colors.blueGrey.shade400, fontSize: 12),
-                    ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
 
                     TabBar(
                       controller: _moduleTabController,
                       isScrollable: true,
-                      indicatorColor: Color(0xFF1FE0B8),
-                      indicatorWeight: 3,
-                      labelColor: Colors.white,
-                      unselectedLabelColor: Colors.blueGrey.shade400,
-                      labelStyle: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 12),
+                      tabAlignment: TabAlignment.start,
+                      indicatorColor: AppTheme.primary,
+                      indicatorWeight: 2.5,
+                      dividerColor: Colors.transparent,
+                      labelColor: AppTheme.textPrimary,
+                      unselectedLabelColor: AppTheme.textMuted,
+                      labelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 12.5),
                       tabs: [
-                        _buildBadgeTab('Electricity', Icons.flash_on, elecCount),
-                        _buildBadgeTab('Generator', Icons.power, genCount),
-                        _buildBadgeTab('Subscriptions', Icons.receipt_long, subCount),
-                        const Tab(child: Row(children: [Icon(Icons.bar_chart, size: 16), SizedBox(width: 6), Text('KPI Dashboard')])),
+                        _buildBadgeTab('Electricity', Icons.electric_bolt_rounded, elecCount),
+                        _buildBadgeTab('Generator', Icons.power_outlined, genCount),
+                        _buildBadgeTab('Subscriptions', Icons.receipt_long_outlined, subCount),
+                        const Tab(child: Row(children: [Icon(Icons.bar_chart_rounded, size: 16), SizedBox(width: 6), Text('KPI Dashboard')])),
                         const Tab(child: Row(children: [Icon(Icons.settings_outlined, size: 16), SizedBox(width: 6), Text('Settings')])),
                       ],
                     ),
@@ -180,7 +196,7 @@ class _EnergyVerificationScreenState extends ConsumerState<EnergyVerificationScr
               // Filter sub-section: Status tabs + Search bar + Severity chips
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                color: const Color(0xFF060B10),
+                color: AppTheme.background,
                 child: Column(
                   children: [
                     // Status pill tabs
@@ -193,25 +209,19 @@ class _EnergyVerificationScreenState extends ConsumerState<EnergyVerificationScr
                         _buildStatusCapsule('Rejected'),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
 
                     // Search Input
                     TextField(
                       controller: _searchController,
                       onChanged: (_) => setState(() {}),
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                      decoration: InputDecoration(
+                      style: GoogleFonts.inter(color: AppTheme.textPrimary, fontSize: 13),
+                      decoration: const InputDecoration(
                         hintText: 'Search building, apartment, agent...',
-                        hintStyle: TextStyle(color: Colors.blueGrey.shade400, fontSize: 13),
-                        prefixIcon: const Icon(Icons.search, color: Colors.blueGrey, size: 18),
-                        filled: true,
-                        fillColor: const Color(0xFF0D1620),
-                        contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFF1D3347))),
-                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFF1D3347))),
+                        prefixIcon: Icon(Icons.search_rounded, size: 18),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
 
                     // Severity level chips
                     SizedBox(
@@ -225,18 +235,23 @@ class _EnergyVerificationScreenState extends ConsumerState<EnergyVerificationScr
                           return Padding(
                             padding: const EdgeInsets.only(right: 8),
                             child: FilterChip(
-                              label: Text(isSelected ? '✓ $sev' : sev),
+                              showCheckmark: false,
+                              label: Text(sev),
                               selected: isSelected,
-                              selectedColor: Color(0xFF00A884),
-                              backgroundColor: const Color(0xFF0D1620),
-                              labelStyle: TextStyle(
-                                color: isSelected ? Colors.white : Colors.blueGrey.shade300,
-                                fontSize: 11,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              selectedColor: AppTheme.primary.withValues(alpha: 0.16),
+                              backgroundColor: AppTheme.surface,
+                              labelStyle: GoogleFonts.inter(
+                                color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
+                                fontSize: 11.5,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                               ),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: isSelected ? Color(0xFF1FE0B8) : const Color(0xFF1D3347)),
+                                borderRadius: BorderRadius.circular(10),
+                                side: BorderSide(
+                                  color: isSelected
+                                      ? AppTheme.primary.withValues(alpha: 0.4)
+                                      : AppTheme.border,
+                                ),
                               ),
                               onSelected: (_) => setState(() => _selectedSeverity = sev),
                             ),

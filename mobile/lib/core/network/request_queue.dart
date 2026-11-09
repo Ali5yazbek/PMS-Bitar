@@ -192,21 +192,23 @@ class RequestQueue {
   bool _isMultipartEndpoint(String endpoint) {
     return endpoint.contains('/generators/submit') || 
            endpoint.contains('/generator-reading') ||
-           endpoint.contains('/subscription-reading');
+           endpoint.contains('/subscription-reading') ||
+           endpoint.contains('/apartment-purchase');
   }
 
   Future<FormData> _buildFormData(Map<String, dynamic> payload) async {
     final formData = FormData();
     for (var entry in payload.entries) {
+      if (entry.value == null) continue;
       if (entry.value is List) {
         // e.g. photos: ['/path/to/img1.jpg', 'base64:....']
         for (var i = 0; i < entry.value.length; i++) {
           final val = entry.value[i].toString();
-          if (val.startsWith('/') || val.contains(':/')) {
+          if (val.startsWith('/') || val.contains(':/') || val.contains(':\\')) {
             try {
               formData.files.add(MapEntry(
                 '${entry.key}[$i]',
-                await MultipartFile.fromFile(val, filename: val.split('/').last),
+                await MultipartFile.fromFile(val, filename: val.split(RegExp(r'[/\\]')).last),
               ));
             } catch (_) {}
           } else if (val.startsWith('base64:')) {
@@ -223,16 +225,37 @@ class RequestQueue {
         }
       } else {
         final val = entry.value.toString();
-        if ((entry.key.contains('photo') || entry.key.contains('file'))) {
-          if (val.startsWith('/') || val.contains(':/')) {
+        final keyLower = entry.key.toLowerCase();
+        if (keyLower.contains('photo') ||
+            keyLower.contains('file') ||
+            keyLower.contains('receipt') ||
+            keyLower.contains('image')) {
+          if (val.startsWith('base64:')) {
             try {
-               formData.files.add(MapEntry(
-                 entry.key,
-                 await MultipartFile.fromFile(val, filename: val.split('/').last),
-               ));
+              final bytes = base64Decode(val.substring(7));
+              formData.files.add(MapEntry(
+                entry.key,
+                MultipartFile.fromBytes(bytes, filename: '${entry.key}_${DateTime.now().millisecondsSinceEpoch}.jpg'),
+              ));
+            } catch (_) {
+              formData.fields.add(MapEntry('${entry.key}_base64', val));
+            }
+          } else if (val.startsWith('data:image')) {
+            try {
+              final commaIdx = val.indexOf(',');
+              final bytes = base64Decode(commaIdx != -1 ? val.substring(commaIdx + 1) : val);
+              formData.files.add(MapEntry(
+                entry.key,
+                MultipartFile.fromBytes(bytes, filename: '${entry.key}_${DateTime.now().millisecondsSinceEpoch}.jpg'),
+              ));
             } catch (_) {}
-          } else if (val.startsWith('base64:')) {
-            formData.fields.add(MapEntry('${entry.key}_base64', val));
+          } else if (val.startsWith('/') || val.contains(':/') || val.contains(':\\')) {
+            try {
+              formData.files.add(MapEntry(
+                entry.key,
+                await MultipartFile.fromFile(val, filename: val.split(RegExp(r'[/\\]')).last),
+              ));
+            } catch (_) {}
           } else {
             formData.fields.add(MapEntry(entry.key, val));
           }

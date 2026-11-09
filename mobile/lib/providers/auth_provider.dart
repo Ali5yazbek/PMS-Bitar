@@ -57,17 +57,41 @@ class AuthNotifier extends Notifier<AuthState> {
     final loggedIn = await _authService.isLoggedIn();
     if (loggedIn) {
       final user = await _authService.getCurrentUser();
-      state = AuthState(user: user, isAuthenticated: true);
-      ApiService().prefetchForRole(user?.role);
+      if (user != null) {
+        // Restore authenticated session immediately so splash navigates straight to the dashboard
+        state = AuthState(user: user, isAuthenticated: true);
 
-      // Re-initialize realtime service with stored token
-      final token = await SecureStorageHelper.instance.read('token');
-      if (token != null && user != null) {
-        _initRealtime(token, user.role);
+        // Immediately start pre-warming role endpoints in parallel (0ms delay)
+        ApiService().prefetchForRole(user.role);
+
+        // Background silent token refresh & notification sync
+        Future.microtask(() async {
+          var currentToken = await SecureStorageHelper.instance.read('token');
+          if (AuthService.isTokenExpiringSoon(currentToken, bufferSeconds: 120)) {
+            final outcome = await AuthService.refreshSession();
+            if (outcome == RefreshResult.revoked) {
+              await logout();
+              return;
+            }
+            if (outcome == RefreshResult.refreshed) {
+              currentToken = await SecureStorageHelper.instance.read('token');
+              final refreshedUser = await _authService.getCurrentUser();
+              if (refreshedUser != null) {
+                state = AuthState(user: refreshedUser, isAuthenticated: true);
+              }
+            }
+          }
+
+          NotificationService().syncAfterLogin();
+
+          if (currentToken != null && state.user != null) {
+            _initRealtime(currentToken, state.user!.role);
+          }
+        });
+        return;
       }
-    } else {
-      state = const AuthState(isAuthenticated: false);
     }
+    state = const AuthState(isAuthenticated: false);
   }
 
   Future<bool> login(String loginIdentifier, String password) async {
@@ -76,6 +100,7 @@ class AuthNotifier extends Notifier<AuthState> {
       final user = await _authService.login(loginIdentifier, password);
       state = AuthState(user: user, isAuthenticated: true);
       ApiService().prefetchForRole(user.role);
+      NotificationService().syncAfterLogin();
 
       // After successful login, wire realtime service + set currency default
       final token = await SecureStorageHelper.instance.read('token');
@@ -98,8 +123,9 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 
   Future<void> logout() async {
-    // Stop notification polling first
+    // Stop notification polling and unregister device FCM token first
     NotificationService().stopPolling();
+    await NotificationService().unregisterCurrentDevice();
     // Dispose realtime connection
     RealtimeService.instance.dispose();
 
@@ -130,24 +156,19 @@ class AuthNotifier extends Notifier<AuthState> {
       final rawData = e.response?.data;
       if (rawData != null) {
         try {
-          // If response is already a Map (Dio parsed it as JSON)
           if (rawData is Map) {
             return rawData['error']?.toString() ?? rawData['message']?.toString() ?? 'Invalid credentials. Please try again.';
           }
-          // If response is a String, try JSON-decoding it
           if (rawData is String && rawData.trim().startsWith('{')) {
             final parsed = jsonDecode(rawData);
             if (parsed is Map) {
               return parsed['error']?.toString() ?? parsed['message']?.toString() ?? 'Invalid credentials. Please try again.';
             }
           }
-          // If it's an HTML page (XAMPP error, etc.) extract a brief summary
           if (rawData is String && rawData.contains('<html')) {
             return 'Server error. Please contact your administrator. (HTTP ${e.response?.statusCode})';
           }
-        } catch (_) {
-          // JSON decode failed — return a safe generic message
-        }
+        } catch (_) {}
       }
       if (e.response?.statusCode == 401) return 'Invalid credentials. Please try again.';
       if (e.response?.statusCode == 403) return 'Access denied. Your account may not have permission.';

@@ -85,7 +85,7 @@ class TenantPaymentsScreen extends ConsumerStatefulWidget {
   ConsumerState<TenantPaymentsScreen> createState() => _TenantPaymentsScreenState();
 }
 
-class _TenantPaymentsScreenState extends ConsumerState<TenantPaymentsScreen> {
+class _TenantPaymentsScreenState extends ConsumerState<TenantPaymentsScreen> with WidgetsBindingObserver {
   Timer? _pollTimer;
   String _activeTab = 'rent'; // 'rent' or 'electricity'
   Map<String, dynamic>? _selectedQrInvoice;
@@ -95,8 +95,14 @@ class _TenantPaymentsScreenState extends ConsumerState<TenantPaymentsScreen> {
   @override
   void initState() {
     super.initState();
-    // Poll every 3 seconds for real-time updates / agent push requests
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+    WidgetsBinding.instance.addObserver(this);
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    // Poll every 25 seconds while active (replaces aggressive 3s invalidation loop)
+    _pollTimer = Timer.periodic(const Duration(seconds: 25), (_) {
       if (mounted) {
         ref.invalidate(tenantRentHistoryProvider);
         ref.invalidate(tenantElectricityInvoicesProvider);
@@ -105,7 +111,17 @@ class _TenantPaymentsScreenState extends ConsumerState<TenantPaymentsScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startPolling();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      _pollTimer?.cancel();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     super.dispose();
   }

@@ -19,4 +19,5 @@ define('DB_USER',     $_ENV['DB_USERNAME'] ?? 'root');
 define('DB_PASS',     $_ENV['DB_PASSWORD'] ?? '');
 define('DB_NAME',     $_ENV['DB_DATABASE'] ?? 'bitar_pms');
 define('JWT_SECRET',  $_ENV['JWT_SECRET']  ?? 'change_me');
-define('JWT_EXPIRES_IN', (int)($_ENV['JWT_EXPIRES_IN'] ?? 86400));
+define('JWT_EXPIRES_IN', (int)($_ENV['JWT_EXPIRES_IN'] ?? 604800));
+define('JWT_REFRESH_EXPIRES_IN', (int)($_ENV['JWT_REFRESH_EXPIRES_IN'] ?? 315360000));

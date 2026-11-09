@@ -362,11 +362,11 @@ class _GeneratorFormWidgetState extends ConsumerState<_GeneratorFormWidget> {
           const SizedBox(height: 8),
           Row(
             children: [
-              _buildModeToggle('meter', '📟 Meter', isLocked),
+              _buildModeToggle('meter', 'Meter', Icons.speed_rounded, isLocked),
               const SizedBox(width: 8),
-              _buildModeToggle('hours', '⏱ Hours', isLocked),
+              _buildModeToggle('hours', 'Hours', Icons.timer_outlined, isLocked),
               const SizedBox(width: 8),
-              _buildModeToggle('both', '✅ Both', isLocked),
+              _buildModeToggle('both', 'Both', Icons.layers_outlined, isLocked),
             ],
           ),
           const SizedBox(height: 16),
@@ -525,7 +525,7 @@ class _GeneratorFormWidgetState extends ConsumerState<_GeneratorFormWidget> {
     );
   }
 
-  Widget _buildModeToggle(String mode, String label, bool disabled) {
+  Widget _buildModeToggle(String mode, String label, IconData icon, bool disabled) {
     final isSelected = _inputMode == mode;
     return Expanded(
       child: InkWell(
@@ -534,21 +534,32 @@ class _GeneratorFormWidgetState extends ConsumerState<_GeneratorFormWidget> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: isSelected ? Color(0xFF00A884).withValues(alpha: 0.3) : const Color(0xFF060B10),
+            color: isSelected ? AppTheme.primary.withValues(alpha: 0.14) : AppTheme.background,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: isSelected ? Color(0xFF1FE0B8) : const Color(0xFF1D3347),
-              width: isSelected ? 1.5 : 1.0,
+              color: isSelected ? AppTheme.primary : AppTheme.border,
+              width: 1.0,
             ),
           ),
           alignment: Alignment.center,
-          child: Text(
-            label,
-            style: TextStyle(
-              color: isSelected ? Colors.white : Colors.blueGrey.shade400,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              fontSize: 12,
-            ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 14,
+                color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: GoogleFonts.inter(
+                  color: isSelected ? AppTheme.textPrimary : AppTheme.textSecondary,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
         ),
       ),

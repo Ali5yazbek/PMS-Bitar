@@ -34,8 +34,10 @@ class NotificationManager {
             $stmt->execute([$userId, $title, $message, $template['type'], $deliveryChannel]);
             $notificationId = $this->db->lastInsertId();
 
-            // Here we would actually trigger Push/Email/SMS if channel is not Database
-            // For now, we simulate success
+            // Trigger real remote FCM push notification via PushNotificationService
+            if (class_exists('\PushNotificationService')) {
+                \PushNotificationService::kickAfterResponse();
+            }
             $this->updateDeliveryStatus($notificationId, 'Delivered');
 
             return true;

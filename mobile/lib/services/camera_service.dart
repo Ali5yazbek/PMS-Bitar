@@ -62,7 +62,7 @@ class CameraService {
       final List<String> paths = [];
       for (var img in images) {
         final bytes = await img.readAsBytes();
-        final compressed = await ImageCompressor.compressImage(bytes);
+        final compressed = kIsWeb ? bytes : await ImageCompressor.compressImage(bytes);
         paths.add(await _saveLocally(compressed));
       }
       return paths;
@@ -70,5 +70,36 @@ class CameraService {
       if (kDebugMode) print('Gallery pick error: $e');
       return [];
     }
+  }
+
+  /// Reads raw image bytes from any photo reference returned by [CameraService]
+  /// (`base64:...`, `data:image/...;base64,...`, or a local device file path).
+  Future<Uint8List?> readPhotoBytes(String? photoRef) async {
+    if (photoRef == null || photoRef.trim().isEmpty) return null;
+    final ref = photoRef.trim();
+    try {
+      if (ref.startsWith('base64:')) {
+        return base64Decode(ref.substring(7));
+      }
+      if (ref.startsWith('data:image')) {
+        final commaIdx = ref.indexOf(',');
+        if (commaIdx != -1) {
+          return base64Decode(ref.substring(commaIdx + 1));
+        }
+      }
+      if (!kIsWeb) {
+        final file = File(ref);
+        if (await file.exists()) {
+          return await file.readAsBytes();
+        }
+      }
+      // Fallback: try raw base64 decode if it looks like base64
+      if (!ref.contains('/') && !ref.contains('\\') && ref.length > 64) {
+        return base64Decode(ref);
+      }
+    } catch (e) {
+      if (kDebugMode) print('readPhotoBytes error: $e');
+    }
+    return null;
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../config/app_theme.dart';
+import '../providers/currency_provider.dart';
 import '../services/agent_api.dart';
 import '../widgets/mobile/enterprise_mobile_scaffold.dart';
 
@@ -22,6 +23,7 @@ class _AgentCollectionHistoryScreenState extends ConsumerState<AgentCollectionHi
   @override
   Widget build(BuildContext context) {
     final historyAsync = ref.watch(rentHistoryProvider);
+    final formatAmount = ref.watch(formatAmountProvider);
 
     return EnterpriseMobileScaffold(
       title: 'Collection History',
@@ -111,7 +113,7 @@ class _AgentCollectionHistoryScreenState extends ConsumerState<AgentCollectionHi
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     const Text('Collected', style: TextStyle(color: Colors.blueGrey, fontSize: 10)),
-                                    Text('\$${item['amount']}', style: GoogleFonts.inter(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+                                    Text(formatAmount(item['amount']), style: GoogleFonts.inter(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 16)),
                                     Text('via ${item['payment_method']}', style: const TextStyle(color: Colors.blueGrey, fontSize: 10)),
                                   ],
                                 ),
@@ -131,7 +133,7 @@ class _AgentCollectionHistoryScreenState extends ConsumerState<AgentCollectionHi
                                       ),
                                     ),
                                     if (!isFull) 
-                                      Text('Rem: \$${item['remaining']}', style: const TextStyle(color: Colors.orangeAccent, fontSize: 10)),
+                                      Text('Rem: ${formatAmount(item['remaining'])}', style: const TextStyle(color: Colors.orangeAccent, fontSize: 10)),
                                   ],
                                 ),
                               ],

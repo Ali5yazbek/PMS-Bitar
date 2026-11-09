@@ -15,63 +15,42 @@ class SyncStatusIndicator extends StatelessWidget {
 
     switch (status.state) {
       case SyncStatusState.synchronized:
-        accentColor = AppTheme.primary;
-        icon = Icons.verified_rounded;
+        accentColor = AppTheme.success;
+        icon = Icons.check_circle_outline_rounded;
         break;
       case SyncStatusState.uploading:
         accentColor = AppTheme.accent;
-        icon = Icons.cloud_sync_rounded;
+        icon = Icons.sync_rounded;
         break;
       case SyncStatusState.offline:
         accentColor = AppTheme.danger;
-        icon = Icons.wifi_off_rounded;
+        icon = Icons.cloud_off_rounded;
         break;
     }
 
+    final cleanLabel = status.label.replaceAll('✓', '').trim();
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: accentColor.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
+        color: accentColor.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: accentColor.withValues(alpha: 0.35),
+          color: accentColor.withValues(alpha: 0.3),
           width: 1,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: accentColor.withValues(alpha: 0.12),
-            blurRadius: 10,
-            spreadRadius: -2,
-          ),
-        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: accentColor,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: accentColor.withValues(alpha: 0.8),
-                  blurRadius: 6,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 6),
           Icon(icon, size: 12, color: accentColor),
-          const SizedBox(width: 4),
+          const SizedBox(width: 5),
           Text(
-            status.label,
-            style: GoogleFonts.plusJakartaSans(
+            cleanLabel,
+            style: GoogleFonts.inter(
               color: accentColor,
               fontSize: 10.5,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],

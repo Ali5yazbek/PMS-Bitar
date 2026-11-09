@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
+import '../services/notification_service.dart';
 import '../core/network/realtime_service.dart';
 
 // ── Dashboard Operational Stats State ───────────────────────────────────────
@@ -104,6 +105,7 @@ class NotificationItem {
   final String category; // Tasks, Approvals, Rejections, Tenant Requests, Generator, Maintenance, Electricity, Contracts, System
   final bool isRead;
   final DateTime createdAt;
+  final String? route;
 
   NotificationItem({
     required this.id,
@@ -112,6 +114,7 @@ class NotificationItem {
     required this.category,
     this.isRead = false,
     required this.createdAt,
+    this.route,
   });
 
   NotificationItem copyWith({bool? isRead}) {
@@ -122,6 +125,7 @@ class NotificationItem {
       category: category,
       isRead: isRead ?? this.isRead,
       createdAt: createdAt,
+      route: route,
     );
   }
 }
@@ -129,16 +133,14 @@ class NotificationItem {
 class CategorizedNotificationsNotifier extends Notifier<List<NotificationItem>> {
   @override
   List<NotificationItem> build() {
-    // Start empty — no fake seeds. Real notifications come from the live API.
-    // loadFromApi() is called by the notifications screen on init.
     return [];
   }
 
-  /// Fetch unread notifications from the live PHP backend.
+  /// Fetch all role-specific operational tasks, requests, collections, and unread notifications
+  /// from the live PHP backend (bypassing cache).
   Future<void> loadFromApi() async {
     try {
-      final res = await ApiService().get('/notifications/unread');
-      final list = (res.data as List<dynamic>?) ?? [];
+      final list = await NotificationService().fetchComprehensiveRoleNotifications();
       state = list.map((n) => NotificationItem(
         id: n['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
         title: n['title']?.toString() ?? 'Notification',
@@ -148,18 +150,35 @@ class CategorizedNotificationsNotifier extends Notifier<List<NotificationItem>> 
         createdAt: n['created_at'] != null
             ? DateTime.tryParse(n['created_at'].toString()) ?? DateTime.now()
             : DateTime.now(),
+        route: n['route']?.toString(),
       )).toList();
-    } catch (_) {
-      // Non-fatal: keep current state, polling will retry
+
+      // Also pass to NotificationService so native push banner triggers if new
+      await NotificationService().processUnreadNotifications(list);
+    } catch (_) {}
+  }
+
+  Future<void> markAsRead(String id) async {
+    NotificationService().markDismissed(id);
+    state = state.map((item) => item.id == id ? item.copyWith(isRead: true) : item).toList();
+    if (int.tryParse(id) != null) {
+      try {
+        await ApiService().post('/notifications/$id/read');
+      } catch (_) {}
     }
   }
 
-  void markAsRead(String id) {
-    state = state.map((item) => item.id == id ? item.copyWith(isRead: true) : item).toList();
-  }
-
-  void markAllAsRead() {
+  Future<void> markAllAsRead() async {
+    final unreadIds = state.where((i) => !i.isRead).map((i) => i.id).toList();
     state = state.map((item) => item.copyWith(isRead: true)).toList();
+    for (final id in unreadIds) {
+      NotificationService().markDismissed(id);
+      if (int.tryParse(id) != null) {
+        try {
+          await ApiService().post('/notifications/$id/read');
+        } catch (_) {}
+      }
+    }
   }
 
   void clearOld() {
@@ -178,12 +197,15 @@ class CategorizedNotificationsNotifier extends Notifier<List<NotificationItem>> 
   }
 
   String _mapCategory(String type) {
-    if (type.contains('task')) return 'Tasks';
-    if (type.contains('approved')) return 'Approvals';
-    if (type.contains('rejected')) return 'Rejections';
-    if (type.contains('tenant')) return 'Tenant Requests';
-    if (type.contains('gen')) return 'Generator';
-    if (type.contains('maint')) return 'Maintenance';
+    final t = type.toLowerCase();
+    if (t == 'maintenance_request' || t.contains('tenant')) return 'Tenant Requests';
+    if (t.contains('maint') || t.contains('ac_')) return 'Maintenance';
+    if (t.contains('elec') || t.contains('meter') || t.contains('sub')) return 'Electricity';
+    if (t.contains('contract') || t.contains('rent')) return 'Contracts';
+    if (t.contains('purchase') || t.contains('approv') || t.contains('accept')) return 'Approvals';
+    if (t.contains('reject')) return 'Rejections';
+    if (t.contains('gen')) return 'Generator';
+    if (t.contains('task')) return 'Tasks';
     return 'System';
   }
 }
