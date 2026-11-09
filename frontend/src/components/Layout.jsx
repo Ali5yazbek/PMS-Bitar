@@ -9,7 +9,7 @@ import {
   FileText, Settings, LogOut, ChevronDown, ChevronRight,
   Briefcase, Activity, Zap, Calendar, Bell, CheckCircle,
   AlertCircle, Fuel, Menu, X, FileCheck2, Truck, BarChart2, Sparkles,
-  ShieldAlert, RefreshCw, Link, Folder, Receipt, PanelLeftClose, PanelLeft, Globe
+  ShieldAlert, RefreshCw, Link, Folder, Receipt, PanelLeftClose, PanelLeft, Globe, Smartphone
 } from 'lucide-react';
 import ExpiryAlertsModal from './ExpiryAlertsModal';
 
@@ -61,20 +61,23 @@ const Layout = () => {
   const { data: notifications } = useQuery({
     queryKey: ['globalNotifications'],
     queryFn: async () => (await axios.get('/schedule/notifications')).data,
-    refetchInterval: 10000,
+    staleTime: 25000,
+    refetchInterval: 30000,
     enabled: role === 'admin' || role === 'manager',
   });
 
   const { data: dbUnreadNotifications } = useQuery({
     queryKey: ['dbUnreadNotifications'],
     queryFn: async () => (await axios.get('/notifications/unread')).data,
-    refetchInterval: 10000,
+    staleTime: 25000,
+    refetchInterval: 30000,
     enabled: role === 'admin' || role === 'manager' || role === 'agent',
   });
 
   const { data: expiringItems } = useQuery({
     queryKey: ['globalExpiringItems'],
     queryFn: async () => (await axios.get('/dashboard/expiring-items')).data,
+    staleTime: 55000,
     refetchInterval: 60000,
     enabled: role === 'admin' || role === 'manager',
   });
@@ -228,7 +231,7 @@ const Layout = () => {
         }
       });
       
-      // Admin-only Translations tool
+      // Admin-only Translations & App Releases tool
       if (role === 'admin') {
          menuItems.push({
             name: 'Translations (i18n)',
@@ -236,6 +239,13 @@ const Layout = () => {
             icon: Globe,
             pageKey: 'dashboard',
             menuKey: 'translations'
+         });
+         menuItems.push({
+            name: 'App Releases',
+            path: '/release-management',
+            icon: Smartphone,
+            pageKey: 'dashboard',
+            menuKey: 'releases'
          });
       }
     }

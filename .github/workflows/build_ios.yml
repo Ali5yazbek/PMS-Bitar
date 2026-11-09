@@ -1,0 +1,82 @@
+name: Build Flutter iOS IPA
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_ios.yml'
+      - 'mobile/**'
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: 'Build Number (e.g. 2)'
+        required: true
+        default: '1'
+      version_name:
+        description: 'Version Name (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+jobs:
+  build-ios:
+    name: Build Native iOS IPA
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java for Android/Shared tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Verify Flutter Installation
+        run: flutter doctor -v
+
+      - name: Install Dependencies
+        run: |
+          cd mobile
+          flutter pub get
+
+      - name: Install CocoaPods
+        run: |
+          cd mobile/ios
+          pod install --repo-update
+          cd ../..
+
+      - name: Build iOS Application (Unsigned IPA / Archive)
+        env:
+          VER_NAME: ${{ github.event.inputs.version_name || '1.0.0' }}
+          BUILD_NUM: ${{ github.event.inputs.build_number || '1' }}
+        run: |
+          cd mobile
+          flutter build ios --release --no-codesign --build-name=$VER_NAME --build-number=$BUILD_NUM
+
+      - name: Package Payload into Installable IPA
+        env:
+          VER_NAME: ${{ github.event.inputs.version_name || '1.0.0' }}
+        run: |
+          mkdir -p build_output/Payload
+          cp -r mobile/build/ios/iphoneos/Runner.app build_output/Payload/
+          cd build_output
+          zip -r SOCIMCO-PMS-v${VER_NAME}.ipa Payload
+          cd ..
+          ls -lh build_output/
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SOCIMCO-PMS-iOS-v${{ github.event.inputs.version_name || '1.0.0' }}
+          path: build_output/*.ipa
+          retention-days: 14
+

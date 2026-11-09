@@ -41,6 +41,27 @@
 			<string>UIInterfaceOrientationLandscapeLeft</string>
 			<string>UIInterfaceOrientationLandscapeRight</string>
 		</array>
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>fetch</string>
+			<string>remote-notification</string>
+		</array>
+		<key>NSCameraUsageDescription</key>
+		<string>SOCIMCO PMS requires camera access to capture apartment maintenance photos, meter readings, and purchase receipts.</string>
+		<key>NSPhotoLibraryUsageDescription</key>
+		<string>SOCIMCO PMS requires photo library access to upload maintenance tickets and cost receipts.</string>
+		<key>NSMicrophoneUsageDescription</key>
+		<string>SOCIMCO PMS requires microphone access for voice command input in Autonomous Agency AI.</string>
+		<key>LSApplicationQueriesSchemes</key>
+		<array>
+			<string>itms-services</string>
+			<string>https</string>
+			<string>http</string>
+			<string>tel</string>
+			<string>mailto</string>
+		</array>
+		<key>FirebaseAppDelegateProxyEnabled</key>
+		<true/>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
 		<key>UIApplicationSupportsIndirectInputEvents</key>

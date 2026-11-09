@@ -1,2 +1,11 @@
 /backend.zip
 /frontend.zip
+backend/uploads/releases/*
+!backend/uploads/releases/.gitkeep
+*.apk
+*.aab
+*.ipa
+node_modules/
+.dart_tool/
+mobile/build/
+python_microservice/.env

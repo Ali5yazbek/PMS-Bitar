@@ -15,7 +15,7 @@ if ($isLocalhost || in_array($origin, $allowedOrigins, true) || empty($origin)) 
 }
 header("Access-Control-Allow-Credentials: true");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
+header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With, X-Idempotency-Key, X-Device-Id");
 header("Content-Type: application/json; charset=UTF-8");
 header("Cache-Control: no-cache, no-store, must-revalidate");
 header("Pragma: no-cache");
@@ -26,8 +26,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit();
 }
 
-// Global error handler — returns JSON instead of 500 HTML page
+// Compress JSON responses (typically 5-10x smaller on slow mobile networks)
+if (extension_loaded('zlib') && !ini_get('zlib.output_compression') && stripos($_SERVER['HTTP_ACCEPT_ENCODING'] ?? '', 'gzip') !== false) {
+    ob_start('ob_gzhandler');
+}
+
+// Global error handler — ignores @-suppressed and non-fatal notices/deprecations
 set_error_handler(function($severity, $message, $file, $line) {
+    if (!(error_reporting() & $severity)) {
+        return false;
+    }
+    if (in_array($severity, [E_NOTICE, E_USER_NOTICE, E_DEPRECATED, E_USER_DEPRECATED, E_STRICT, E_WARNING, E_USER_WARNING], true)) {
+        return true;
+    }
     http_response_code(500);
     echo json_encode([
         'error' => 'PHP Error',
@@ -144,6 +155,8 @@ if (file_exists(__DIR__ . '/utils/AuditLogger.php')) {
         }
     }
 }
+require_once __DIR__ . '/core/IdempotencyGuard.php';
+require_once __DIR__ . '/services/PushNotificationService.php';
 if (file_exists(__DIR__ . '/services/RentGenerationService.php')) require_once __DIR__ . '/services/RentGenerationService.php';
 require_once __DIR__ . '/controllers/AIController.php';
 require_once __DIR__ . '/controllers/GeneratorController.php';
@@ -192,12 +205,52 @@ $router->get('/api/health', function() {
     echo json_encode(["status" => "ok", "message" => "PMS API is running."]);
 });
 
-// AI Chat Route
-$router->post('/api/ai/chat', [AIController::class, 'chat']);
+// System Migration & Schema Heal Endpoint
+$router->post('/api/system/migrate', function() {
+    $user = AuthMiddleware::requireLogin();
+    $role = strtolower(trim($user['role'] ?? ''));
+    if ($role !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Forbidden: Admins only']);
+        return;
+    }
+    require_once __DIR__ . '/services/PushSchema.php';
+    $db = Database::getInstance()->getConnection();
+    PushSchema::migrate($db, false);
+    echo json_encode(['success' => true, 'message' => 'Schema migrated and roles healed successfully']);
+});
+$router->get('/api/system/migrate', function() {
+    $user = AuthMiddleware::requireLogin();
+    $role = strtolower(trim($user['role'] ?? ''));
+    if ($role !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Forbidden: Admins only']);
+        return;
+    }
+    require_once __DIR__ . '/services/PushSchema.php';
+    $db = Database::getInstance()->getConnection();
+    PushSchema::migrate($db, false);
+    echo json_encode(['success' => true, 'message' => 'Schema migrated and roles healed successfully']);
+});
+
+// Autonomous Agency AI Routes (Cross-Platform Web + Mobile)
+$router->post('/api/ai/chat',              [AIController::class, 'chat']);
+$router->get('/api/ai/history',            [AIController::class, 'getHistory']);
+$router->post('/api/ai/clear',             [AIController::class, 'clearHistory']);
+$router->post('/api/ai/execute-tool',      [AIController::class, 'executeTool']);
+$router->get('/api/ai/proactive-insights', [AIController::class, 'proactiveInsights']);
+$router->get('/api/ai/diagnostics',        [AIController::class, 'diagnostics']);
+$router->get('/api/ai/admin-control',      [AIController::class, 'adminControl']);
+$router->post('/api/ai/admin-control',     [AIController::class, 'adminControl']);
 
 // Auth Routes
 $router->post('/api/auth/login', [AuthController::class, 'login']);
+$router->post('/api/auth/refresh', [AuthController::class, 'refresh']);
+$router->post('/api/auth/logout', [AuthController::class, 'logout']);
 $router->get('/api/auth/me', [AuthController::class, 'me']);
+$router->post('/api/auth/fcm-token', [AuthController::class, 'saveFcmToken']);
+$router->post('/api/devices/register', [DevicesController::class, 'register']);
+$router->post('/api/devices/unregister', [DevicesController::class, 'unregister']);
 
 // User Management Routes
 $router->get('/api/users', [UsersController::class, 'index']);
@@ -697,6 +750,10 @@ $router->get('/api/daily-reports/dashboard', [DailyReportsController::class, 'da
 $router->post('/api/daily-reports', [DailyReportsController::class, 'store']);
 
 // Notifications Routes
+$router->get('/api/notifications', [NotificationsController::class, 'index']);
+$router->get('/api/notifications/unread-count', [NotificationsController::class, 'unreadCount']);
+$router->get('/api/notifications/pending-actions', [NotificationsController::class, 'pendingActions']);
+$router->post('/api/notifications/read-all', [NotificationsController::class, 'markAllRead']);
 $router->get('/api/notifications/unread', [NotificationsController::class, 'getUnread']);
 $router->post('/api/notifications/{id}/read', [NotificationsController::class, 'markAsRead']);
 
@@ -734,6 +791,29 @@ $router->post('/api/agent/rent/collect', [AgentRentController::class, 'collectPa
 $router->get('/api/agent/rent/history', [AgentRentController::class, 'getHistory']);
 $router->post('/api/agent/rent/request-qr', [AgentRentController::class, 'requestQrAuthorization']);
 $router->get('/api/agent/rent-requests', [AgentRentController::class, 'getTenantRequests']);
+
+// Independent App Distribution & Release Management Routes
+$router->get('/api/releases/public-info', [AppReleaseController::class, 'publicInfo']);
+$router->get('/api/releases/check-update', [AppReleaseController::class, 'checkUpdate']);
+$router->get('/api/releases/download-latest', [AppReleaseController::class, 'download']);
+$router->get('/api/releases/download/{id}', [AppReleaseController::class, 'download']);
+$router->post('/api/releases/track-install', [AppReleaseController::class, 'trackInstall']);
+$router->get('/api/releases/ios-manifest/{id}', [AppReleaseController::class, 'iosManifest']);
+
+// Admin Application Release Manager Routes
+$router->get('/api/releases/admin/dashboard', [AppReleaseController::class, 'adminDashboard']);
+$router->post('/api/releases/admin/upload', [AppReleaseController::class, 'uploadRelease']);
+$router->post('/api/releases/admin/import-local-apk', [AppReleaseController::class, 'importLocalApk']);
+$router->put('/api/releases/admin/{id}', [AppReleaseController::class, 'updateRelease']);
+$router->post('/api/releases/admin/{id}/activate', [AppReleaseController::class, 'activateRelease']);
+$router->delete('/api/releases/admin/{id}', [AppReleaseController::class, 'deleteRelease']);
+$router->post('/api/releases/admin/settings', [AppReleaseController::class, 'updateSettings']);
+
+// Duplicate-submission guard + post-response push drain for write requests
+IdempotencyGuard::guard();
+if (in_array($_SERVER['REQUEST_METHOD'], ['POST', 'PUT', 'DELETE'], true)) {
+    PushNotificationService::kickAfterResponse();
+}
 
 // Dispatch request
 $router->dispatch($_SERVER['REQUEST_URI']);

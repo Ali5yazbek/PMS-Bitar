@@ -94,6 +94,8 @@ const FinancialReports = lazy(() => import('./pages/FinancialReports'));
 const AiChat = lazy(() => import('./pages/AiChat'));
 const ActionControlReport = lazy(() => import('./pages/ActionControlReport'));
 const DataQualityControl = lazy(() => import('./pages/DataQualityControl'));
+const DownloadApp = lazy(() => import('./pages/DownloadApp'));
+const ReleaseManager = lazy(() => import('./pages/ReleaseManager'));
 
 // Global loading fallback
 const PageLoader = () => (
@@ -118,8 +120,8 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     const user = JSON.parse(localStorage.getItem('user'));
     if (user?.role === 'agent') {
       const path = window.location.pathname;
-      // Allow root so it can redirect via RoleBasedRootRedirect, otherwise strictly require /agent-
-      if (path !== '/' && !path.startsWith('/agent-') && !path.startsWith('/Bitar/agent-')) {
+      // Allow root so it can redirect via RoleBasedRootRedirect, otherwise strictly require /agent- or /ai-chat
+      if (path !== '/' && !path.startsWith('/agent-') && !path.startsWith('/Bitar/agent-') && !path.includes('/ai-chat')) {
          return <Navigate to="/agent-dashboard" replace />;
       }
     }
@@ -156,6 +158,7 @@ function App() {
         <Suspense fallback={<PageLoader />}>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/download" element={<DownloadApp />} />
             
             <Route path="/" element={
               <ProtectedRoute>
@@ -191,6 +194,7 @@ function App() {
               <Route path="system-jobs" element={<SystemJobsMonitor />} />
 
               <Route path="global-settings" element={<GlobalSettings />} />
+              <Route path="release-management" element={<ReleaseManager />} />
 
               <Route path="ai-chat" element={<AiChat />} />
               <Route path="action-control" element={<ActionControlReport />} />
